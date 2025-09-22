@@ -11,20 +11,23 @@ __description__ = "Multi-agent AI system for physics education research automati
 # Import main components
 from .core.orchestrator import ResearchOrchestrator
 from .core.config import Config
-from .agents.literature_scout import LiteratureScoutAgent
-from .agents.document_analyzer import DocumentAnalyzerAgent
-from .agents.physics_specialist import PhysicsSpecialistAgent
-from .agents.content_synthesizer import ContentSynthesizerAgent
-from .agents.report_generator import ReportGeneratorAgent
-from .agents.quality_controller import QualityControllerAgent
+
+# TODO: Import agents when they are implemented  
+# from .agents.literature_scout import LiteratureScoutAgent
+# from .agents.document_analyzer import DocumentAnalyzerAgent
+# from .agents.physics_specialist import PhysicsSpecialistAgent
+# from .agents.content_synthesizer import ContentSynthesizerAgent
+# from .agents.report_generator import ReportGeneratorAgent
+# from .agents.quality_controller import QualityControllerAgent
 
 __all__ = [
     "ResearchOrchestrator",
     "Config",
-    "LiteratureScoutAgent",
-    "DocumentAnalyzerAgent", 
-    "PhysicsSpecialistAgent",
-    "ContentSynthesizerAgent",
-    "ReportGeneratorAgent",
-    "QualityControllerAgent"
+    # TODO: Add agent classes as they are implemented
+    # "LiteratureScoutAgent",
+    # "DocumentAnalyzerAgent", 
+    # "PhysicsSpecialistAgent",
+    # "ContentSynthesizerAgent",
+    # "ReportGeneratorAgent",
+    # "QualityControllerAgent"
 ]
