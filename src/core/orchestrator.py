@@ -18,9 +18,9 @@ from .models import ResearchQuery, ResearchResult, AgentState
 # Import implemented agents
 from agents.literature_scout import LiteratureScoutAgent
 from agents.document_analyzer import DocumentAnalyzerAgent
+from agents.physics_specialist import PhysicsSpecialistAgent
 
 # TODO: Import other agents when they are implemented
-# from agents.physics_specialist import PhysicsSpecialistAgent
 # from agents.content_synthesizer import ContentSynthesizerAgent
 # from agents.report_generator import ReportGeneratorAgent
 # from agents.quality_controller import QualityControllerAgent
@@ -91,6 +91,11 @@ class ResearchOrchestrator:
                 ollama_host=self.config.ollama_host
             )
             
+            agents["physics_specialist"] = PhysicsSpecialistAgent(
+                config=self.config.get_agent_config("physics_specialist"),
+                ollama_host=self.config.ollama_host
+            )
+            
             # TODO: Initialize other agents as they are implemented
             # agents["physics_specialist"] = PhysicsSpecialistAgent(
             #     config=self.config.get_agent_config("physics_specialist")
@@ -120,9 +125,9 @@ class ResearchOrchestrator:
         # Add nodes for implemented agents only
         workflow.add_node("literature_search", self._literature_search_node)
         workflow.add_node("document_analysis", self._document_analysis_node)
+        workflow.add_node("physics_validation", self._physics_validation_node)
         
         # TODO: Add nodes for other agents when they are implemented
-        # workflow.add_node("physics_validation", self._physics_validation_node)
         # workflow.add_node("content_synthesis", self._content_synthesis_node)
         # workflow.add_node("report_generation", self._report_generation_node)
         # workflow.add_node("quality_control", self._quality_control_node)
@@ -133,11 +138,13 @@ class ResearchOrchestrator:
         # Connect literature search to document analysis
         workflow.add_edge("literature_search", "document_analysis")
         
-        # For now, document analysis leads to END until other agents are implemented
-        workflow.add_edge("document_analysis", END)
+        # Connect document analysis to physics validation
+        workflow.add_edge("document_analysis", "physics_validation")
+        
+        # For now, physics validation leads to END until other agents are implemented
+        workflow.add_edge("physics_validation", END)
         
         # TODO: Uncomment when other agents are implemented
-        # workflow.add_edge("document_analysis", "physics_validation")
         # workflow.add_edge("physics_validation", "content_synthesis")
         # workflow.add_edge("content_synthesis", "report_generation")
         # workflow.add_edge("report_generation", "quality_control")
@@ -198,11 +205,13 @@ class ResearchOrchestrator:
         self.logger.info("Starting physics validation...")
         
         try:
-            result = await self.agents["physics_specialist"].process(state)
-            state.validation_results = result.get("validation", {})
+            # Process through Physics Specialist Agent
+            result_state = await self.agents["physics_specialist"].process(state)
+            state = result_state
             state.current_step = "physics_validation_complete"
             
-            self.logger.info("Physics validation completed")
+            validation_count = len(state.validation_results) if hasattr(state, 'validation_results') and state.validation_results else 0
+            self.logger.info(f"Physics validation completed for {validation_count} documents")
             
         except Exception as e:
             self.logger.error(f"Physics validation failed: {e}")
@@ -312,10 +321,10 @@ class ResearchOrchestrator:
             # Build result
             result = ResearchResult(
                 query=query,
-                literature_sources=final_state.literature_results,
-                analysis_summary=final_state.synthesized_content,
-                report=final_state.generated_report,
-                quality_score=final_state.quality_assessment.get("score", 0.0),
+                literature_sources=final_state.papers if hasattr(final_state, 'papers') else [],
+                analysis_summary=final_state.synthesized_content if hasattr(final_state, 'synthesized_content') else {},
+                report=final_state.generated_report if hasattr(final_state, 'generated_report') else {},
+                quality_score=final_state.quality_assessment.get("score", 0.0) if hasattr(final_state, 'quality_assessment') else 0.0,
                 processing_time=datetime.now() - query.timestamp,
                 errors=final_state.errors
             )
