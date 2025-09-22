@@ -92,35 +92,35 @@ class Config:
     def _init_default_models(self) -> Dict[str, ModelConfig]:
         """Initialize default model configurations."""
         return {
-            "qwen_32b": ModelConfig(
-                name="Qwen2.5-32B-Instruct",
-                model_id="qwen2.5:32b-instruct-q4_k_m",
-                vram_usage=14,
+            "qwen_coder_14b": ModelConfig(
+                name="Qwen2.5-Coder-14B",
+                model_id="qwen2.5-coder:14b",
+                vram_usage=9,
                 context_length=32000
             ),
             "deepseek_14b": ModelConfig(
                 name="DeepSeek-R1-14B",
-                model_id="deepseek-r1:14b-q4_k_m",
+                model_id="deepseek-r1:14b",
                 vram_usage=9,
                 context_length=64000
             ),
-            "qwen_math_7b": ModelConfig(
-                name="Qwen2.5-Math-7B",
-                model_id="qwen2.5-math:7b",
-                vram_usage=7,
-                context_length=64000
+            "phi4": ModelConfig(
+                name="Phi-4",
+                model_id="phi4:latest",
+                vram_usage=9,
+                context_length=16000
             ),
-            "mistral_22b": ModelConfig(
-                name="Mistral-Small-22B",
-                model_id="mistral-small:22b-q4_k_m",
-                vram_usage=12,
+            "mistral_7b": ModelConfig(
+                name="Mistral-7B",
+                model_id="mistral:7b",
+                vram_usage=4,
                 context_length=32000
             ),
-            "qwen_coder_7b": ModelConfig(
-                name="Qwen2.5-Coder-7B",
-                model_id="qwen2.5-coder:7b",
-                vram_usage=7,
-                context_length=64000
+            "llama_8b": ModelConfig(
+                name="Llama-3.1-8B",
+                model_id="llama3.1:8b",
+                vram_usage=5,
+                context_length=128000
             )
         }
     
@@ -129,31 +129,31 @@ class Config:
         return {
             "literature_scout": AgentConfig(
                 name="Literature Scout",
-                model=self.models["qwen_32b"],
+                model=self.models["qwen_coder_14b"],
                 role="Search and rank academic papers",
                 capabilities=["arxiv_search", "semantic_scholar", "ranking"]
             ),
             "document_analyzer": AgentConfig(
                 name="Document Analyzer", 
-                model=self.models["qwen_32b"],
+                model=self.models["deepseek_14b"],
                 role="Parse PDFs and extract key findings",
                 capabilities=["pdf_parsing", "text_extraction", "summarization"]
             ),
             "physics_specialist": AgentConfig(
                 name="Physics Specialist",
-                model=self.models["qwen_math_7b"],
+                model=self.models["phi4"],
                 role="Validate physics concepts and mathematics",
                 capabilities=["physics_validation", "math_checking", "concept_verification"]
             ),
             "content_synthesizer": AgentConfig(
                 name="Content Synthesizer",
-                model=self.models["mistral_22b"],
+                model=self.models["deepseek_14b"],
                 role="Combine insights and identify patterns",
                 capabilities=["synthesis", "pattern_recognition", "contradiction_detection"]
             ),
             "report_generator": AgentConfig(
                 name="Report Generator",
-                model=self.models["qwen_coder_7b"],
+                model=self.models["qwen_coder_14b"],
                 role="Generate formatted academic reports",
                 capabilities=["latex_generation", "markdown_formatting", "pdf_creation"]
             ),

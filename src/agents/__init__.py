@@ -5,8 +5,10 @@ PER Agent system - Individual agent implementations.
 # Import base agent
 from .base_agent import BaseAgent
 
-# TODO: Import individual agents as they are implemented
-# from .literature_scout import LiteratureScoutAgent
+# Import implemented agents
+from .literature_scout import LiteratureScoutAgent
+
+# TODO: Import other agents as they are implemented
 # from .document_analyzer import DocumentAnalyzerAgent
 # from .physics_specialist import PhysicsSpecialistAgent
 # from .content_synthesizer import ContentSynthesizerAgent
@@ -15,5 +17,6 @@ from .base_agent import BaseAgent
 
 __all__ = [
     "BaseAgent",
+    "LiteratureScoutAgent",
     # TODO: Add agent classes as they are implemented
 ]

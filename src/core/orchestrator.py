@@ -15,8 +15,10 @@ from langchain_core.messages import HumanMessage, AIMessage
 from .config import Config
 from .models import ResearchQuery, ResearchResult, AgentState
 
-# TODO: Import agents when they are implemented
-# from ..agents.literature_scout import LiteratureScoutAgent
+# Import implemented agents
+from ..agents.literature_scout import LiteratureScoutAgent
+
+# TODO: Import other agents when they are implemented
 # from ..agents.document_analyzer import DocumentAnalyzerAgent
 # from ..agents.physics_specialist import PhysicsSpecialistAgent
 # from ..agents.content_synthesizer import ContentSynthesizerAgent
@@ -78,10 +80,13 @@ class ResearchOrchestrator:
         agents = {}
         
         try:
-            # TODO: Initialize agents as they are implemented
-            # agents["literature_scout"] = LiteratureScoutAgent(
-            #     config=self.config.get_agent_config("literature_scout")
-            # )
+            # Initialize implemented agents
+            agents["literature_scout"] = LiteratureScoutAgent(
+                config=self.config.get_agent_config("literature_scout"),
+                ollama_host=self.config.ollama_host
+            )
+            
+            # TODO: Initialize other agents as they are implemented
             # agents["document_analyzer"] = DocumentAnalyzerAgent(
             #     config=self.config.get_agent_config("document_analyzer")
             # )
@@ -98,7 +103,7 @@ class ResearchOrchestrator:
             #     config=self.config.get_agent_config("quality_controller")
             # )
             
-            self.logger.info("Agent initialization ready (agents will be added as implemented)")
+            self.logger.info(f"Initialized {len(agents)} agents successfully")
             
         except Exception as e:
             self.logger.error(f"Failed to initialize agents: {e}")
