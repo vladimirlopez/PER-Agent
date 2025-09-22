@@ -584,139 +584,68 @@ Source: {paper.source}
         """
         Search AIP Publishing journals including American Journal of Physics, 
         The Physics Teacher, Physics Today, and other premium content.
-        Requires valid AIP credentials for access to pubs.aip.org.
+        Uses AIP Session Manager for long-lived authentication.
         """
         papers = []
-        # Best-effort: try authenticated session to pubs.aip.org, otherwise fall back to CrossRef
-        import httpx
-        from bs4 import BeautifulSoup
-        from core.credentials import PremiumCredentials
-
-        creds = PremiumCredentials()
-        client = httpx.AsyncClient(timeout=20.0)
-
-            # Try Playwright-based login helper to get cookies if available
+        
         try:
-            from core.premium_auth import synchronous_get_cookies_loop, httpx_cookie_dict_to_header
-            aip_cookies = None
-            if creds.has_aip_access():
-                ac = creds.get_aip_credentials()
-                try:
-                    aip_cookies = synchronous_get_cookies_loop('aip', ac['username'], ac['password'])
-                    if aip_cookies:
-                        client.headers.update({'Cookie': httpx_cookie_dict_to_header(aip_cookies)})
-                        self.logger.info('Applied Playwright-derived cookies for AIP session')
-                except Exception:
-                    self.logger.debug('Playwright AIP cookie helper failed; continuing with httpx flows')
-        except Exception:
-            # premium_auth or playwright not available; continue
-            aip_cookies = None
-
-        try:
-            self.logger.info("Searching AIP publications (authenticated when possible)...")
-
-            # Build a conservative search string
-            search_query = f"{query.question} physics education"
-
-            # If we have AIP credentials, try to login and hit search pages
-            if creds.has_aip_access():
-                self.logger.info("Attempting authenticated AIP session")
-                aip_creds = creds.get_aip_credentials()
-                try:
-                    # Pseudo-login flow: fetch login page to get any CSRF tokens, then post
-                    login_page = await client.get("https://pubs.aip.org/login")
-                    soup = BeautifulSoup(login_page.text, "html.parser")
-                    # Try to find csrf token or hidden inputs
-                    token_input = soup.find('input', {'name': 'authenticity_token'})
-                    token = token_input.get('value') if token_input else None
-
-                    login_payload = {
-                        'username': aip_creds['username'],
-                        'password': aip_creds['password']
-                    }
-                    if token:
-                        login_payload['authenticity_token'] = token
-
-                    post = await client.post("https://pubs.aip.org/login", data=login_payload)
-                    if post.status_code not in (200, 302):
-                        self.logger.warning(f"AIP login attempt returned {post.status_code}")
-                    else:
-                        self.logger.info("AIP login attempt finished; attempting search as authenticated user")
-
-                    # Search URL pattern — try simple query param
-                    resp = await client.get("https://pubs.aip.org/search", params={"q": search_query})
-                    if resp.status_code == 200:
-                        soup = BeautifulSoup(resp.text, "html.parser")
-                        # Attempt to parse search result items conservatively
-                        results = soup.select('.search-result, .article-list-item')
-                        for item in results[:10]:
-                            title_tag = item.find('h2') or item.find('a')
-                            title = title_tag.get_text(strip=True) if title_tag else None
-                            link = title_tag.get('href') if title_tag and title_tag.has_attr('href') else None
-                            abstract_tag = item.select_one('.abstract')
-                            abstract = abstract_tag.get_text(strip=True) if abstract_tag else ''
-                            meta = item.get_text(separator=' | ')
-                            # Basic filter by keywords
-                            if title and any(k.lower() in (title + abstract + meta).lower() for k in keywords + [query.question]):
-                                paper = Paper(
-                                    title=title,
-                                    authors=[],
-                                    abstract=abstract,
-                                    published_date=None,
-                                    doi=None,
-                                    url=(link if link and link.startswith('http') else ("https://pubs.aip.org" + link if link else None)),
-                                    pdf_url=None,
-                                    journal=None,
-                                    source="AIP",
-                                    keywords=keywords
-                                )
-                                papers.append(paper)
-
-                except Exception as e:
-                    self.logger.warning(f"AIP authenticated search failed: {e}; falling back to CrossRef/plain search")
-
-            # Fallback: Use CrossRef API to find DOIs for the query and then fetch metadata
-            if not papers:
-                try:
-                    self.logger.info("Falling back to CrossRef metadata search for AIP-related content")
-                    cr = await client.get("https://api.crossref.org/works", params={"query": search_query, "rows": 10})
-                    if cr.status_code == 200:
-                        j = cr.json()
-                        items = j.get('message', {}).get('items', [])
-                        for item in items:
-                            title = item.get('title', [None])[0]
-                            abstract = item.get('abstract') or ''
-                            doi = item.get('DOI')
-                            pub_date = None
-                            if item.get('issued') and item['issued'].get('date-parts'):
-                                yp = item['issued']['date-parts'][0]
-                                if yp:
-                                    pub_date = self._parse_year_to_date(yp[0])
-
-                            if title and any(k.lower() in (title + (abstract or '')).lower() for k in keywords + [query.question]):
-                                paper = Paper(
-                                    title=title,
-                                    authors=[a.get('family', '') for a in item.get('author', [])] or [],
-                                    abstract=(abstract or '').replace('<jats:p>', '').replace('</jats:p>', ''),
-                                    published_date=pub_date,
-                                    doi=doi,
-                                    url=item.get('URL'),
-                                    pdf_url=None,
-                                    journal=item.get('container-title', [None])[0],
-                                    source="CrossRef",
-                                    keywords=keywords
-                                )
-                                papers.append(paper)
-
-                except Exception as e:
-                    self.logger.warning(f"CrossRef fallback failed: {e}")
-
+            # Import AIP session manager
+            from core.aip_session_manager import AIPSessionManager
+            
+            session_manager = AIPSessionManager()
+            
+            # Get authenticated session
+            cookies = await session_manager.get_authenticated_session()
+            if cookies:
+                self.logger.info("Using authenticated AIP session")
+                # Use session manager's search method
+                articles = await session_manager.search_aip_articles(
+                    f"{query.question} physics education", 
+                    limit=20
+                )
+                # TODO: Convert articles to Paper objects
+                return papers
+            else:
+                self.logger.info("No AIP authentication - falling back to CrossRef")
+                
         except Exception as e:
-            self.logger.error(f"AIP search failed unexpectedly: {e}")
-        finally:
-            await client.aclose()
-
-        self.logger.info(f"AIP search completed: {len(papers)} papers/resources discovered")
+            self.logger.warning(f"AIP search failed: {e}")
+        
+        # Fallback to CrossRef for AIP journal searches
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                # Search for AIP journals via CrossRef
+                aip_journals = [
+                    "American Journal of Physics",
+                    "The Physics Teacher", 
+                    "Physics Today",
+                    "Journal of Applied Physics"
+                ]
+                
+                for journal in aip_journals:
+                    search_url = "https://api.crossref.org/works"
+                    params = {
+                        'query': f"{query.question}",
+                        'filter': f'container-title:{journal}',
+                        'rows': 5,
+                        'sort': 'relevance'
+                    }
+                    
+                    response = await client.get(search_url, params=params)
+                    if response.status_code == 200:
+                        data = response.json()
+                        for item in data.get('message', {}).get('items', []):
+                            paper = self._parse_crossref_item(item)
+                            if paper:
+                                papers.append(paper)
+                    
+                    # Rate limiting
+                    await asyncio.sleep(0.5)
+                    
+        except Exception as e:
+            self.logger.error(f"CrossRef AIP fallback failed: {e}")
+        
         return papers
     
     async def _search_compadre(self, query, keywords: List[str]) -> List[Paper]:
@@ -725,75 +654,56 @@ Source: {paper.source}
         Access physics education resources, simulations, and teaching materials.
         """
         papers = []
-        import httpx
-        from bs4 import BeautifulSoup
-        from core.credentials import PremiumCredentials
-
-        papers = []
-        client = httpx.AsyncClient(timeout=20.0)
-        creds = PremiumCredentials()
-
+        
         try:
-            self.logger.info("Searching ComPADRE (attempting authenticated access when configured)")
-            search_query = " ".join((keywords or [])[:5]) + f" {query.question}"
+            # Try to load captured ComPADRE cookies
+            from core.cookie_loader import load_captured_cookies
+            
+            cookies = load_captured_cookies('compadre')
+            
+            import httpx
+            from bs4 import BeautifulSoup
+            
+            async with httpx.AsyncClient(cookies=cookies, timeout=30.0) as client:
+                self.logger.info("Searching ComPADRE (with authentication if available)")
+                search_query = " ".join((keywords or [])[:5]) + f" {query.question}"
 
-            # Simple public search on ComPADRE (no official public API documented for search)
-            try:
-                resp = await client.get("https://www.compadre.org/search/", params={"q": search_query})
-                if resp.status_code == 200:
-                    soup = BeautifulSoup(resp.text, "html.parser")
-                    items = soup.select('.result, .search-result')
-                    for it in items[:10]:
-                        title_tag = it.find('a') or it.find('h3')
-                        title = title_tag.get_text(strip=True) if title_tag else None
-                        link = title_tag.get('href') if title_tag and title_tag.has_attr('href') else None
-                        desc = it.get_text(strip=True)
-                        if title and any(k.lower() in (title + desc).lower() for k in keywords + [query.question]):
-                            paper = Paper(
-                                title=title,
-                                authors=[],
-                                abstract=desc,
-                                published_date=None,
-                                url=(link if link and link.startswith('http') else ("https://www.compadre.org" + link if link else None)),
-                                journal='ComPADRE',
-                                source='ComPADRE',
-                                keywords=keywords
-                            )
-                            papers.append(paper)
-
-            except Exception as e:
-                self.logger.warning(f"ComPADRE basic search failed: {e}")
-
-            # If ComPADRE credentials are available, attempt a Playwright login helper first
-            if creds.has_compadre_access():
+                # Search ComPADRE
                 try:
-                    from core.premium_auth import synchronous_get_cookies_loop, httpx_cookie_dict_to_header
-                    comp_creds = creds.get_compadre_credentials()
-                    comp_cookies = synchronous_get_cookies_loop('compadre', comp_creds['username'], comp_creds['password'])
-                    if comp_cookies:
-                        client.headers.update({'Cookie': httpx_cookie_dict_to_header(comp_cookies)})
-                        self.logger.info('Applied Playwright-derived cookies for ComPADRE session')
+                    resp = await client.get("https://www.compadre.org/search/", params={"q": search_query})
+                    if resp.status_code == 200:
+                        soup = BeautifulSoup(resp.text, "html.parser")
+                        items = soup.select('.result, .search-result, .resource-item')
+                        
+                        for item in items[:10]:
+                            title_tag = item.find('a') or item.find('h3')
+                            title = title_tag.get_text(strip=True) if title_tag else None
+                            link = title_tag.get('href') if title_tag and title_tag.has_attr('href') else None
+                            desc = item.get_text(strip=True)
+                            
+                            if title and any(k.lower() in (title + desc).lower() for k in keywords + [query.question]):
+                                paper = Paper(
+                                    title=title,
+                                    authors=[],
+                                    abstract=desc[:500],  # Limit abstract length
+                                    published_date=None,
+                                    url=(link if link and link.startswith('http') else ("https://www.compadre.org" + link if link else None)),
+                                    journal='ComPADRE',
+                                    source='ComPADRE',
+                                    keywords=keywords
+                                )
+                                papers.append(paper)
+                                
                     else:
-                        # Try simple POST login fallback
-                        login_page = await client.get('https://www.compadre.org/login')
-                        soup = BeautifulSoup(login_page.text, 'html.parser')
-                        token_input = soup.find('input', {'name': 'csrfmiddlewaretoken'})
-                        token = token_input.get('value') if token_input else None
-                        payload = {'username': comp_creds['username'], 'password': comp_creds['password']}
-                        if token:
-                            payload['csrfmiddlewaretoken'] = token
-                        post = await client.post('https://www.compadre.org/accounts/login/', data=payload)
-                        self.logger.info(f"ComPADRE login attempt status: {post.status_code}")
+                        self.logger.warning(f"ComPADRE search returned {resp.status_code}")
 
                 except Exception as e:
-                    self.logger.warning(f"ComPADRE authenticated attempt failed: {e}")
+                    self.logger.warning(f"ComPADRE search failed: {e}")
 
         except Exception as e:
-            self.logger.error(f"ComPADRE search failed: {e}")
-        finally:
-            await client.aclose()
+            self.logger.error(f"ComPADRE search error: {e}")
 
-        self.logger.info(f"ComPADRE search completed: {len(papers)} resources")
+        self.logger.info(f"ComPADRE search completed: {len(papers)} resources found")
         return papers
     
     async def _search_per_central(self, query, keywords: List[str]) -> List[Paper]:
@@ -802,65 +712,54 @@ Source: {paper.source}
         Specialized database for physics education research (PER) content.
         """
         papers = []
-        import httpx
-        from bs4 import BeautifulSoup
-        from core.credentials import PremiumCredentials
-
-        papers = []
-        client = httpx.AsyncClient(timeout=20.0)
-        creds = PremiumCredentials()
-
+        
         try:
-            self.logger.info("Searching PER Central (authenticated when available)")
-            search_query = f"{query.question} physics education"
+            # Try to load captured PER Central cookies
+            from core.cookie_loader import load_captured_cookies
+            
+            cookies = load_captured_cookies('per_central')
+            
+            import httpx
+            from bs4 import BeautifulSoup
+            
+            async with httpx.AsyncClient(cookies=cookies, timeout=30.0) as client:
+                self.logger.info("Searching PER Central (with authentication if available)")
+                search_query = f"{query.question} physics education"
 
-            # PER-Central provides a web interface; attempt a search page scrape
-            try:
-                resp = await client.get('https://per-central.org/search', params={'q': search_query})
-                if resp.status_code == 200:
-                    soup = BeautifulSoup(resp.text, 'html.parser')
-                    items = soup.select('.search-result, .result-item')
-                    for it in items[:10]:
-                        title_tag = it.find('a') or it.find('h3')
-                        title = title_tag.get_text(strip=True) if title_tag else None
-                        link = title_tag.get('href') if title_tag and title_tag.has_attr('href') else None
-                        desc = it.get_text(strip=True)
-                        if title and any(k.lower() in (title + desc).lower() for k in keywords + [query.question]):
-                            paper = Paper(
-                                title=title,
-                                authors=[],
-                                abstract=desc,
-                                published_date=None,
-                                url=(link if link and link.startswith('http') else ("https://per-central.org" + link if link else None)),
-                                journal='PER-Central',
-                                source='PER-Central',
-                                keywords=keywords
-                            )
-                            papers.append(paper)
-
-            except Exception as e:
-                self.logger.warning(f"PER Central basic search failed: {e}")
-
-            # If PER-Central credentials are available, a login attempt can be made (best-effort)
-            if creds.has_per_central_access():
+                # Search PER Central
                 try:
-                    per_creds = creds.get_per_central_credentials()
-                    login_page = await client.get('https://per-central.org/login')
-                    soup = BeautifulSoup(login_page.text, 'html.parser')
-                    token_input = soup.find('input', {'name': 'csrfmiddlewaretoken'})
-                    token = token_input.get('value') if token_input else None
-                    payload = {'username': per_creds['username'], 'password': per_creds['password']}
-                    if token:
-                        payload['csrfmiddlewaretoken'] = token
-                    post = await client.post('https://per-central.org/accounts/login/', data=payload)
-                    self.logger.info(f"PER-Central login attempt status: {post.status_code}")
+                    resp = await client.get('https://per-central.org/search', params={'q': search_query})
+                    if resp.status_code == 200:
+                        soup = BeautifulSoup(resp.text, 'html.parser')
+                        items = soup.select('.search-result, .result-item, .paper-item')
+                        
+                        for item in items[:10]:
+                            title_tag = item.find('a') or item.find('h3')
+                            title = title_tag.get_text(strip=True) if title_tag else None
+                            link = title_tag.get('href') if title_tag and title_tag.has_attr('href') else None
+                            desc = item.get_text(strip=True)
+                            
+                            if title and any(k.lower() in (title + desc).lower() for k in keywords + [query.question]):
+                                paper = Paper(
+                                    title=title,
+                                    authors=[],
+                                    abstract=desc[:500],  # Limit abstract length
+                                    published_date=None,
+                                    url=(link if link and link.startswith('http') else ("https://per-central.org" + link if link else None)),
+                                    journal='PER-Central',
+                                    source='PER-Central',
+                                    keywords=keywords
+                                )
+                                papers.append(paper)
+                                
+                    else:
+                        self.logger.warning(f"PER Central search returned {resp.status_code}")
+
                 except Exception as e:
-                    self.logger.warning(f"PER Central authenticated attempt failed: {e}")
+                    self.logger.warning(f"PER Central search failed: {e}")
 
         except Exception as e:
-            self.logger.error(f"PER Central search failed: {e}")
-        finally:
-            await client.aclose()
+            self.logger.error(f"PER Central search error: {e}")
 
-        self.logger.info(f"PER Central search completed: {len(papers)} papers/resources")
+        self.logger.info(f"PER Central search completed: {len(papers)} resources found")
         return papers
