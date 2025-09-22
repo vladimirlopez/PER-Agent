@@ -17,9 +17,9 @@ from .models import ResearchQuery, ResearchResult, AgentState
 
 # Import implemented agents
 from agents.literature_scout import LiteratureScoutAgent
+from agents.document_analyzer import DocumentAnalyzerAgent
 
 # TODO: Import other agents when they are implemented
-# from agents.document_analyzer import DocumentAnalyzerAgent
 # from agents.physics_specialist import PhysicsSpecialistAgent
 # from agents.content_synthesizer import ContentSynthesizerAgent
 # from agents.report_generator import ReportGeneratorAgent
@@ -86,10 +86,12 @@ class ResearchOrchestrator:
                 ollama_host=self.config.ollama_host
             )
             
+            agents["document_analyzer"] = DocumentAnalyzerAgent(
+                config=self.config.get_agent_config("document_analyzer"),
+                ollama_host=self.config.ollama_host
+            )
+            
             # TODO: Initialize other agents as they are implemented
-            # agents["document_analyzer"] = DocumentAnalyzerAgent(
-            #     config=self.config.get_agent_config("document_analyzer")
-            # )
             # agents["physics_specialist"] = PhysicsSpecialistAgent(
             #     config=self.config.get_agent_config("physics_specialist")
             # )
@@ -115,32 +117,40 @@ class ResearchOrchestrator:
         """Build the LangGraph workflow for the research process."""
         workflow = StateGraph(AgentState)
         
-        # Add nodes for each agent
+        # Add nodes for implemented agents only
         workflow.add_node("literature_search", self._literature_search_node)
         workflow.add_node("document_analysis", self._document_analysis_node)
-        workflow.add_node("physics_validation", self._physics_validation_node)
-        workflow.add_node("content_synthesis", self._content_synthesis_node)
-        workflow.add_node("report_generation", self._report_generation_node)
-        workflow.add_node("quality_control", self._quality_control_node)
         
-        # Define the workflow edges
+        # TODO: Add nodes for other agents when they are implemented
+        # workflow.add_node("physics_validation", self._physics_validation_node)
+        # workflow.add_node("content_synthesis", self._content_synthesis_node)
+        # workflow.add_node("report_generation", self._report_generation_node)
+        # workflow.add_node("quality_control", self._quality_control_node)
+        
+        # Define the workflow edges - only connect implemented agents
         workflow.set_entry_point("literature_search")
         
+        # Connect literature search to document analysis
         workflow.add_edge("literature_search", "document_analysis")
-        workflow.add_edge("document_analysis", "physics_validation")
-        workflow.add_edge("physics_validation", "content_synthesis")
-        workflow.add_edge("content_synthesis", "report_generation")
-        workflow.add_edge("report_generation", "quality_control")
+        
+        # For now, document analysis leads to END until other agents are implemented
+        workflow.add_edge("document_analysis", END)
+        
+        # TODO: Uncomment when other agents are implemented
+        # workflow.add_edge("document_analysis", "physics_validation")
+        # workflow.add_edge("physics_validation", "content_synthesis")
+        # workflow.add_edge("content_synthesis", "report_generation")
+        # workflow.add_edge("report_generation", "quality_control")
         
         # Quality control can either end or loop back for corrections
-        workflow.add_conditional_edges(
-            "quality_control",
-            self._quality_decision,
-            {
-                "approved": END,
-                "revision_needed": "content_synthesis"
-            }
-        )
+        # workflow.add_conditional_edges(
+        #     "quality_control",
+        #     self._quality_decision,
+        #     {
+        #         "approved": END,
+        #         "revision_needed": "content_synthesis"
+        #     }
+        # )
         
         return workflow
     
@@ -149,11 +159,12 @@ class ResearchOrchestrator:
         self.logger.info("Starting literature search...")
         
         try:
-            result = await self.agents["literature_scout"].process(state)
-            state.literature_results = result.get("papers", [])
+            result_state = await self.agents["literature_scout"].process(state)
+            # The agent returns the updated state directly
+            state = result_state
             state.current_step = "literature_search_complete"
             
-            self.logger.info(f"Found {len(state.literature_results)} papers")
+            self.logger.info(f"Found {len(state.papers)} papers")
             
         except Exception as e:
             self.logger.error(f"Literature search failed: {e}")
@@ -166,8 +177,12 @@ class ResearchOrchestrator:
         self.logger.info("Starting document analysis...")
         
         try:
+            # Set papers from literature search results
+            state.papers = state.literature_results
+            
+            # Process through Document Analyzer Agent
             result = await self.agents["document_analyzer"].process(state)
-            state.analyzed_documents = result.get("analyzed_docs", [])
+            state.analyzed_documents = result.analyzed_documents
             state.current_step = "document_analysis_complete"
             
             self.logger.info(f"Analyzed {len(state.analyzed_documents)} documents")

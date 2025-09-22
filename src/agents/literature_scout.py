@@ -119,7 +119,7 @@ KEYWORDS:
             "keyword_extraction": keyword_extraction_prompt
         }
     
-    async def process(self, state: AgentState) -> Dict[str, Any]:
+    async def process(self, state: AgentState) -> AgentState:
         """
         Main processing method for literature search and ranking.
         
@@ -168,22 +168,24 @@ KEYWORDS:
             
             self.logger.info(f"Final selection: {len(filtered_papers)} papers")
             
-            return {
+            # Update the state with the results
+            state.papers = filtered_papers
+            state.search_metadata = {
                 "success": True,
-                "papers": filtered_papers,
                 "total_found": len(all_papers),
                 "unique_count": len(unique_papers),
                 "final_count": len(filtered_papers),
                 "enhanced_keywords": enhanced_keywords,
-                "search_metadata": {
-                    "arxiv_results": len(search_results[0]) if not isinstance(search_results[0], Exception) else 0,
-                    "semantic_scholar_results": len(search_results[1]) if not isinstance(search_results[1], Exception) else 0,
-                    "timestamp": datetime.now().isoformat()
-                }
+                "arxiv_results": len(search_results[0]) if not isinstance(search_results[0], Exception) else 0,
+                "semantic_scholar_results": len(search_results[1]) if not isinstance(search_results[1], Exception) else 0,
             }
             
+            return state
+            
         except Exception as e:
-            return self._handle_error(e, "Literature search processing")
+            self.logger.error(f"Literature search processing failed: {e}")
+            state.errors.append(f"Literature search error: {e}")
+            return state
     
     async def _enhance_keywords(self, query) -> List[str]:
         """Use LLM to enhance and expand search keywords."""
