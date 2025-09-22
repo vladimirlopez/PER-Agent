@@ -92,25 +92,46 @@ class Paper:
 class AnalyzedDocument:
     """Document analysis results."""
     paper: Paper
+    full_text: str  # Extracted PDF text (truncated)
     key_findings: List[str]
-    methodology: str
-    results_summary: str
+    methodology: Dict[str, Any]  # Methodology details from LLM analysis
+    pedagogical_implications: List[str]
     limitations: List[str]
-    physics_concepts: List[str]
-    educational_approaches: List[str]
+    future_work: List[str]
+    relevance_score: int  # 1-10 relevance score
+    summary: str  # Generated summary
+    extraction_metadata: Dict[str, Any] = field(default_factory=dict)
+    
+    # Additional fields for compatibility
+    physics_concepts: List[str] = field(default_factory=list)
+    educational_approaches: List[str] = field(default_factory=list)
+    results_summary: str = ""  # For backward compatibility
     statistical_data: Dict[str, Any] = field(default_factory=dict)
     extraction_confidence: float = 0.0
+    
+    def __post_init__(self):
+        """Set compatibility fields after initialization."""
+        if not self.results_summary:
+            self.results_summary = self.summary
+        if not self.educational_approaches:
+            self.educational_approaches = self.pedagogical_implications
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             "paper": self.paper.to_dict(),
+            "full_text": self.full_text,
             "key_findings": self.key_findings,
             "methodology": self.methodology,
-            "results_summary": self.results_summary,
+            "pedagogical_implications": self.pedagogical_implications,
             "limitations": self.limitations,
+            "future_work": self.future_work,
+            "relevance_score": self.relevance_score,
+            "summary": self.summary,
+            "extraction_metadata": self.extraction_metadata,
             "physics_concepts": self.physics_concepts,
             "educational_approaches": self.educational_approaches,
+            "results_summary": self.results_summary,
             "statistical_data": self.statistical_data,
             "extraction_confidence": self.extraction_confidence
         }
@@ -119,17 +140,64 @@ class AnalyzedDocument:
 @dataclass
 class ValidationResult:
     """Physics concept validation results."""
-    concept: str
-    is_valid: bool
-    confidence: float
-    explanation: str
-    mathematical_accuracy: float
-    physics_accuracy: float
+    document: "AnalyzedDocument"  # The document that was validated
+    concept_accuracy: Dict[str, Any]  # Physics concept accuracy assessment
+    mathematical_validation: Dict[str, Any]  # Mathematical validation results
+    methodology_review: Dict[str, Any]  # Research methodology review
+    pedagogical_assessment: Dict[str, Any]  # Educational approach assessment
+    overall_validation: Dict[str, Any]  # Overall validation summary
+    cross_check_results: Dict[str, Any]  # Cross-reference validation
+    misconception_analysis: Dict[str, Any]  # Misconception detection results
+    recommendations: List[str]  # Specific recommendations
+    validation_timestamp: str  # When validation was performed
+    validator_model: str  # Model used for validation
+    
+    # Legacy fields for backward compatibility
+    concept: str = ""
+    is_valid: bool = True
+    confidence: float = 0.0
+    explanation: str = ""
+    mathematical_accuracy: float = 0.0
+    physics_accuracy: float = 0.0
     suggested_corrections: List[str] = field(default_factory=list)
+    
+    def __post_init__(self):
+        """Set legacy fields for backward compatibility."""
+        if not self.concept:
+            self.concept = self.document.paper.title
+        
+        overall = self.overall_validation
+        if overall and "total_score" in overall:
+            self.confidence = overall["total_score"] / 10.0
+            self.is_valid = overall["total_score"] >= 6.0
+            
+        if self.concept_accuracy and "score" in self.concept_accuracy:
+            self.physics_accuracy = self.concept_accuracy["score"] / 10.0
+            
+        if self.mathematical_validation and "score" in self.mathematical_validation:
+            self.mathematical_accuracy = self.mathematical_validation["score"] / 10.0
+            
+        if not self.explanation:
+            self.explanation = overall.get("recommendation", "Validation completed")
+            
+        if not self.suggested_corrections:
+            self.suggested_corrections = self.recommendations
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
+            "document_title": self.document.paper.title,
+            "concept_accuracy": self.concept_accuracy,
+            "mathematical_validation": self.mathematical_validation,
+            "methodology_review": self.methodology_review,
+            "pedagogical_assessment": self.pedagogical_assessment,
+            "overall_validation": self.overall_validation,
+            "cross_check_results": self.cross_check_results,
+            "misconception_analysis": self.misconception_analysis,
+            "recommendations": self.recommendations,
+            "validation_timestamp": self.validation_timestamp,
+            "validator_model": self.validator_model,
+            # Legacy fields
             "concept": self.concept,
             "is_valid": self.is_valid,
             "confidence": self.confidence,

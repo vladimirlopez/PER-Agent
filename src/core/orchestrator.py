@@ -19,9 +19,9 @@ from .models import ResearchQuery, ResearchResult, AgentState
 from agents.literature_scout import LiteratureScoutAgent
 from agents.document_analyzer import DocumentAnalyzerAgent
 from agents.physics_specialist import PhysicsSpecialistAgent
+from agents.content_synthesizer import ContentSynthesizerAgent
 
 # TODO: Import other agents when they are implemented
-# from agents.content_synthesizer import ContentSynthesizerAgent
 # from agents.report_generator import ReportGeneratorAgent
 # from agents.quality_controller import QualityControllerAgent
 
@@ -96,13 +96,12 @@ class ResearchOrchestrator:
                 ollama_host=self.config.ollama_host
             )
             
+            agents["content_synthesizer"] = ContentSynthesizerAgent(
+                config=self.config.get_agent_config("content_synthesizer"),
+                ollama_host=self.config.ollama_host
+            )
+            
             # TODO: Initialize other agents as they are implemented
-            # agents["physics_specialist"] = PhysicsSpecialistAgent(
-            #     config=self.config.get_agent_config("physics_specialist")
-            # )
-            # agents["content_synthesizer"] = ContentSynthesizerAgent(
-            #     config=self.config.get_agent_config("content_synthesizer")
-            # )
             # agents["report_generator"] = ReportGeneratorAgent(
             #     config=self.config.get_agent_config("report_generator")
             # )
@@ -126,13 +125,13 @@ class ResearchOrchestrator:
         workflow.add_node("literature_search", self._literature_search_node)
         workflow.add_node("document_analysis", self._document_analysis_node)
         workflow.add_node("physics_validation", self._physics_validation_node)
+        workflow.add_node("content_synthesis", self._content_synthesis_node)
         
         # TODO: Add nodes for other agents when they are implemented
-        # workflow.add_node("content_synthesis", self._content_synthesis_node)
         # workflow.add_node("report_generation", self._report_generation_node)
         # workflow.add_node("quality_control", self._quality_control_node)
         
-        # Define the workflow edges - only connect implemented agents
+        # Define the workflow edges - connect implemented agents
         workflow.set_entry_point("literature_search")
         
         # Connect literature search to document analysis
@@ -141,11 +140,13 @@ class ResearchOrchestrator:
         # Connect document analysis to physics validation
         workflow.add_edge("document_analysis", "physics_validation")
         
-        # For now, physics validation leads to END until other agents are implemented
-        workflow.add_edge("physics_validation", END)
+        # Connect physics validation to content synthesis
+        workflow.add_edge("physics_validation", "content_synthesis")
+        
+        # For now, content synthesis leads to END until other agents are implemented
+        workflow.add_edge("content_synthesis", END)
         
         # TODO: Uncomment when other agents are implemented
-        # workflow.add_edge("physics_validation", "content_synthesis")
         # workflow.add_edge("content_synthesis", "report_generation")
         # workflow.add_edge("report_generation", "quality_control")
         
@@ -216,6 +217,25 @@ class ResearchOrchestrator:
         except Exception as e:
             self.logger.error(f"Physics validation failed: {e}")
             state.errors.append(f"Physics validation error: {e}")
+        
+        return state
+    
+    async def _content_synthesis_node(self, state: AgentState) -> AgentState:
+        """Content synthesis node execution."""
+        self.logger.info("Starting content synthesis...")
+        
+        try:
+            # Process through Content Synthesizer Agent
+            result_state = await self.agents["content_synthesizer"].process(state)
+            state = result_state
+            state.current_step = "content_synthesis_complete"
+            
+            insights_count = len(state.synthesis_insights) if hasattr(state, 'synthesis_insights') and state.synthesis_insights else 0
+            self.logger.info(f"Content synthesis completed with {insights_count} insights generated")
+            
+        except Exception as e:
+            self.logger.error(f"Content synthesis failed: {e}")
+            state.errors.append(f"Content synthesis error: {e}")
         
         return state
     

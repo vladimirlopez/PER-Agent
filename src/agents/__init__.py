@@ -9,9 +9,9 @@ from .base_agent import BaseAgent
 from .literature_scout import LiteratureScoutAgent
 from .document_analyzer import DocumentAnalyzerAgent
 from .physics_specialist import PhysicsSpecialistAgent
+from .content_synthesizer import ContentSynthesizerAgent
 
 # TODO: Import other agents as they are implemented
-# from .content_synthesizer import ContentSynthesizerAgent
 # from .report_generator import ReportGeneratorAgent
 # from .quality_controller import QualityControllerAgent
 
@@ -20,5 +20,6 @@ __all__ = [
     "LiteratureScoutAgent",
     "DocumentAnalyzerAgent",
     "PhysicsSpecialistAgent",
+    "ContentSynthesizerAgent",
     # TODO: Add agent classes as they are implemented
 ]
