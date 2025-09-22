@@ -16,14 +16,14 @@ from .config import Config
 from .models import ResearchQuery, ResearchResult, AgentState
 
 # Import implemented agents
-from ..agents.literature_scout import LiteratureScoutAgent
+from agents.literature_scout import LiteratureScoutAgent
 
 # TODO: Import other agents when they are implemented
-# from ..agents.document_analyzer import DocumentAnalyzerAgent
-# from ..agents.physics_specialist import PhysicsSpecialistAgent
-# from ..agents.content_synthesizer import ContentSynthesizerAgent
-# from ..agents.report_generator import ReportGeneratorAgent
-# from ..agents.quality_controller import QualityControllerAgent
+# from agents.document_analyzer import DocumentAnalyzerAgent
+# from agents.physics_specialist import PhysicsSpecialistAgent
+# from agents.content_synthesizer import ContentSynthesizerAgent
+# from agents.report_generator import ReportGeneratorAgent
+# from agents.quality_controller import QualityControllerAgent
 
 
 class ResearchOrchestrator:

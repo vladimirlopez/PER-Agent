@@ -13,7 +13,7 @@ import requests
 from langchain_core.prompts import PromptTemplate
 
 from .base_agent import BaseAgent
-from ..core.models import AgentState, Paper, ResearchDomain
+from core.models import AgentState, Paper, ResearchDomain
 
 
 class LiteratureScoutAgent(BaseAgent):

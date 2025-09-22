@@ -16,7 +16,8 @@ from .models import (
     ResearchDomain,
     ReportFormat
 )
-from .orchestrator import ResearchOrchestrator
+# Delay orchestrator import to avoid circular dependencies
+# from .orchestrator import ResearchOrchestrator
 
 __all__ = [
     "Config",
@@ -31,5 +32,5 @@ __all__ = [
     "QualityAssessment",
     "ResearchDomain",
     "ReportFormat",
-    "ResearchOrchestrator"
+    # "ResearchOrchestrator"
 ]

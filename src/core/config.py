@@ -90,7 +90,7 @@ class Config:
         self.outputs_dir.mkdir(exist_ok=True)
     
     def _init_default_models(self) -> Dict[str, ModelConfig]:
-        """Initialize default model configurations."""
+        """Initialize default model configurations optimized for 16GB VRAM."""
         return {
             "qwen_coder_14b": ModelConfig(
                 name="Qwen2.5-Coder-14B",
@@ -99,9 +99,15 @@ class Config:
                 context_length=32000
             ),
             "deepseek_14b": ModelConfig(
-                name="DeepSeek-R1-14B",
+                name="DeepSeek-R1-14B", 
                 model_id="deepseek-r1:14b",
                 vram_usage=9,
+                context_length=64000
+            ),
+            "deepseek_8b": ModelConfig(
+                name="DeepSeek-R1-8B",
+                model_id="deepseek-r1:8b", 
+                vram_usage=5,
                 context_length=64000
             ),
             "phi4": ModelConfig(
@@ -110,58 +116,76 @@ class Config:
                 vram_usage=9,
                 context_length=16000
             ),
-            "mistral_7b": ModelConfig(
-                name="Mistral-7B",
-                model_id="mistral:7b",
+            "mistral_7b_gpu": ModelConfig(
+                name="Mistral-7B-GPU",
+                model_id="mistral:7b-gpu",
                 vram_usage=4,
                 context_length=32000
             ),
-            "llama_8b": ModelConfig(
-                name="Llama-3.1-8B",
-                model_id="llama3.1:8b",
-                vram_usage=5,
-                context_length=128000
+            "pixtral_12b": ModelConfig(
+                name="Pixtral-12B",
+                model_id="pixtral:12b",
+                vram_usage=8,
+                context_length=16000
+            ),
+            "qwen_coder_32b": ModelConfig(
+                name="Qwen2.5-Coder-32B-Instruct",
+                model_id="qwen2.5-coder:32b-instruct-q4_K_M",
+                vram_usage=19,
+                context_length=32000
             )
         }
     
     def _init_default_agents(self) -> Dict[str, AgentConfig]:
-        """Initialize default agent configurations."""
+        """Initialize default agent configurations optimized for 16GB VRAM."""
         return {
             "literature_scout": AgentConfig(
                 name="Literature Scout",
-                model=self.models["qwen_coder_14b"],
+                model=self.models["qwen_coder_14b"],  # Use 14B for VRAM efficiency, 32B as alternate
                 role="Search and rank academic papers",
-                capabilities=["arxiv_search", "semantic_scholar", "ranking"]
+                capabilities=["arxiv_search", "semantic_scholar", "ranking"],
+                max_retries=3,
+                timeout=300
             ),
             "document_analyzer": AgentConfig(
                 name="Document Analyzer", 
-                model=self.models["deepseek_14b"],
+                model=self.models["qwen_coder_14b"],  # Use 14B, can fall back to 32B if needed
                 role="Parse PDFs and extract key findings",
-                capabilities=["pdf_parsing", "text_extraction", "summarization"]
+                capabilities=["pdf_parsing", "text_extraction", "summarization"],
+                max_retries=3,
+                timeout=300
             ),
             "physics_specialist": AgentConfig(
                 name="Physics Specialist",
-                model=self.models["phi4"],
+                model=self.models["deepseek_14b"],  # Primary: deepseek-r1:14b
                 role="Validate physics concepts and mathematics",
-                capabilities=["physics_validation", "math_checking", "concept_verification"]
+                capabilities=["physics_validation", "math_checking", "concept_verification"],
+                max_retries=3,
+                timeout=300
             ),
             "content_synthesizer": AgentConfig(
                 name="Content Synthesizer",
-                model=self.models["deepseek_14b"],
+                model=self.models["deepseek_14b"],  # Primary: deepseek-r1:14b
                 role="Combine insights and identify patterns",
-                capabilities=["synthesis", "pattern_recognition", "contradiction_detection"]
+                capabilities=["synthesis", "pattern_recognition", "contradiction_detection"],
+                max_retries=3,
+                timeout=300
             ),
             "report_generator": AgentConfig(
                 name="Report Generator",
-                model=self.models["qwen_coder_14b"],
+                model=self.models["qwen_coder_14b"],  # Primary: qwen2.5-coder:14b
                 role="Generate formatted academic reports",
-                capabilities=["latex_generation", "markdown_formatting", "pdf_creation"]
+                capabilities=["latex_generation", "markdown_formatting", "pdf_creation"],
+                max_retries=3,
+                timeout=300
             ),
             "quality_controller": AgentConfig(
                 name="Quality Controller",
-                model=self.models["deepseek_14b"],
+                model=self.models["deepseek_14b"],  # Primary: deepseek-r1:14b
                 role="Review outputs for accuracy and standards",
-                capabilities=["quality_assessment", "accuracy_validation", "standard_compliance"]
+                capabilities=["quality_assessment", "accuracy_validation", "standard_compliance"],
+                max_retries=3,
+                timeout=300
             )
         }
     
@@ -194,13 +218,56 @@ class Config:
             raise ValueError(f"Agent '{agent_name}' not found in configuration")
         return self.agents[agent_name]
     
+    def get_alternate_model_for_agent(self, agent_name: str) -> Optional[ModelConfig]:
+        """Get alternate model configuration for an agent if primary fails."""
+        alternates = {
+            "literature_scout": "deepseek_14b",      # From qwen_coder_14b to deepseek_14b
+            "document_analyzer": "phi4",             # From qwen_coder_14b to phi4
+            "physics_specialist": "qwen_coder_14b",  # From deepseek_14b to qwen_coder_14b
+            "content_synthesizer": "mistral_7b_gpu", # From deepseek_14b to mistral_7b_gpu
+            "report_generator": "deepseek_14b",      # From qwen_coder_14b to deepseek_14b
+            "quality_controller": "qwen_coder_14b"   # From deepseek_14b to qwen_coder_14b
+        }
+        
+        alternate_key = alternates.get(agent_name)
+        if alternate_key and alternate_key in self.models:
+            return self.models[alternate_key]
+        return None
+    
     def validate_system_requirements(self) -> bool:
         """Validate that system meets requirements for configured models."""
         total_vram_needed = max(model.vram_usage for model in self.models.values())
         
         # Check if RTX 5070 Ti (16GB) can handle the largest model
         if total_vram_needed > 16:
-            print(f"Warning: Largest model requires {total_vram_needed}GB VRAM, but system has 16GB")
+            print(f"Warning: Largest model requires {total_vram_needed}GB VRAM, but RTX 5070 Ti has 16GB")
+            print(f"Recommendation: Use alternate models or enable model offloading")
             return False
             
         return True
+    
+    def get_vram_efficient_models(self) -> Dict[str, ModelConfig]:
+        """Get models that fit within 16GB VRAM limit."""
+        return {name: model for name, model in self.models.items() 
+                if model.vram_usage <= 16}
+    
+    def recommend_model_for_agent(self, agent_name: str, max_vram: int = 16) -> ModelConfig:
+        """Recommend the best model for an agent within VRAM constraints."""
+        agent_config = self.get_agent_config(agent_name)
+        primary_model = agent_config.model
+        
+        # If primary model fits, use it
+        if primary_model.vram_usage <= max_vram:
+            return primary_model
+            
+        # Otherwise, get the alternate
+        alternate = self.get_alternate_model_for_agent(agent_name)
+        if alternate and alternate.vram_usage <= max_vram:
+            return alternate
+            
+        # Fallback to smallest available model
+        efficient_models = self.get_vram_efficient_models()
+        if efficient_models:
+            return min(efficient_models.values(), key=lambda m: m.vram_usage)
+            
+        raise ValueError(f"No suitable model found for agent {agent_name} within {max_vram}GB VRAM")

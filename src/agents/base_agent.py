@@ -12,8 +12,8 @@ from langchain_ollama import OllamaLLM
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
-from ..core.config import AgentConfig
-from ..core.models import AgentState
+from core.config import AgentConfig
+from core.models import AgentState
 
 
 class BaseAgent(ABC):
@@ -73,8 +73,9 @@ class BaseAgent(ABC):
         return logger
     
     def _initialize_llm(self) -> OllamaLLM:
-        """Initialize the Ollama LLM for this agent."""
+        """Initialize the Ollama LLM for this agent with fallback support."""
         try:
+            # Try primary model first
             llm = OllamaLLM(
                 model=self.config.model.model_id,
                 base_url=self.ollama_host,
@@ -87,8 +88,37 @@ class BaseAgent(ABC):
             return llm
             
         except Exception as e:
-            self.logger.error(f"Failed to initialize LLM: {e}")
-            raise
+            self.logger.warning(f"Primary model failed to initialize: {e}")
+            
+            # Try to get alternate model
+            from ..core.config import Config
+            config = Config()
+            alternate_model = config.get_alternate_model_for_agent(
+                self.config.name.lower().replace(' ', '_')
+            )
+            
+            if alternate_model:
+                try:
+                    self.logger.info(f"Trying alternate model: {alternate_model.name}")
+                    llm = OllamaLLM(
+                        model=alternate_model.model_id,
+                        base_url=self.ollama_host,
+                        temperature=alternate_model.temperature,
+                        num_predict=alternate_model.max_tokens,
+                        timeout=self.config.timeout
+                    )
+                    
+                    # Update config to reflect the model we're actually using
+                    self.config.model = alternate_model
+                    self.logger.info(f"Successfully initialized alternate LLM: {alternate_model.name}")
+                    return llm
+                    
+                except Exception as e2:
+                    self.logger.error(f"Alternate model also failed: {e2}")
+            
+            # If all else fails, raise the original error
+            self.logger.error(f"Failed to initialize any LLM for {self.config.name}")
+            raise e
     
     @abstractmethod
     def _initialize_prompts(self) -> Dict[str, PromptTemplate]:
