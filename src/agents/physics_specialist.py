@@ -316,10 +316,18 @@ Return JSON analysis:
             
             response = await self.llm.ainvoke(prompt)
             
+            # Handle different response types
+            if hasattr(response, 'content'):
+                response_text = response.content
+            elif isinstance(response, str):
+                response_text = response
+            else:
+                response_text = str(response)
+            
             # Parse JSON response
             try:
                 # Extract JSON from response
-                json_match = re.search(r'\{.*\}', response.content, re.DOTALL)
+                json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
                 if json_match:
                     validation = json.loads(json_match.group())
                     return validation

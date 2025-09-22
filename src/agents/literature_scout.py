@@ -264,7 +264,8 @@ KEYWORDS:
                             published_date=result.published,
                             journal=result.journal_ref,
                             source="arxiv",
-                            keywords=[]  # Will be enhanced later
+                            keywords=[],  # Will be enhanced later
+                            pdf_url=result.pdf_url if hasattr(result, 'pdf_url') else f"https://arxiv.org/pdf/{result.get_short_id()}.pdf"
                         )
                         papers.append(paper)
                         
@@ -332,8 +333,11 @@ KEYWORDS:
                     if result.get("authors"):
                         authors = [author.get("name", "Unknown") for author in result["authors"]]
                     
-                    # Determine URL
+                    # Determine URL and PDF URL
                     paper_url = result.get("url") or f"https://semanticscholar.org/paper/{result['paperId']}"
+                    pdf_url = None
+                    if result.get("openAccessPdf") and result["openAccessPdf"].get("url"):
+                        pdf_url = result["openAccessPdf"]["url"]
                     
                     paper = Paper(
                         title=result.get("title", "Untitled"),
@@ -344,7 +348,8 @@ KEYWORDS:
                         journal=result.get("venue", ""),
                         citations=result.get("citationCount", 0),
                         source="semantic_scholar",
-                        keywords=[]
+                        keywords=[],
+                        pdf_url=pdf_url
                     )
                     papers.append(paper)
                     

@@ -178,129 +178,270 @@ SUMMARY:
         return state
 
     async def _download_and_parse_pdf(self, paper: Paper) -> Optional[str]:
-        """Download PDF and extract text content."""
+        """Download PDF and extract text content with multiple fallback strategies."""
         
-        # Try to get PDF URL
-        pdf_url = None
+        # Try multiple PDF URL strategies
+        pdf_urls = []
+        
+        # Primary PDF URL
         if paper.pdf_url:
-            pdf_url = paper.pdf_url
-        elif paper.url and paper.url.endswith('.pdf'):
-            pdf_url = paper.url
-        elif 'arxiv.org' in paper.url:
-            # Convert arXiv abstract URL to PDF URL
+            pdf_urls.append(paper.pdf_url)
+        
+        # Direct PDF links
+        if paper.url and paper.url.endswith('.pdf'):
+            pdf_urls.append(paper.url)
+        
+        # arXiv specific handling
+        if 'arxiv.org' in paper.url:
             arxiv_id = re.search(r'arxiv\.org/abs/(\d+\.\d+)', paper.url)
             if arxiv_id:
-                pdf_url = f"https://arxiv.org/pdf/{arxiv_id.group(1)}.pdf"
+                pdf_urls.append(f"https://arxiv.org/pdf/{arxiv_id.group(1)}.pdf")
+                # Try alternative arXiv formats
+                pdf_urls.append(f"https://export.arxiv.org/pdf/{arxiv_id.group(1)}.pdf")
         
-        if not pdf_url:
-            self.logger.warning(f"No PDF URL found for paper: {paper.title}")
+        # Semantic Scholar PDF links (they sometimes provide direct URLs)
+        if paper.pdf_url and 'semanticscholar.org' in paper.pdf_url:
+            pdf_urls.append(paper.pdf_url)
+        
+        # Remove duplicates while preserving order
+        pdf_urls = list(dict.fromkeys(pdf_urls))
+        
+        if not pdf_urls:
+            self.logger.warning(f"No PDF URLs found for paper: {paper.title}")
             return None
         
-        try:
-            # Download PDF
-            response = requests.get(pdf_url, timeout=30, stream=True)
-            response.raise_for_status()
+        # Try each URL until one works
+        for i, pdf_url in enumerate(pdf_urls, 1):
+            self.logger.info(f"Trying PDF URL {i}/{len(pdf_urls)}: {pdf_url[:60]}...")
             
-            # Save to temporary file
-            pdf_path = self.temp_dir / f"paper_{hash(paper.url)}.pdf"
-            with open(pdf_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            
-            # Extract text using PyMuPDF (better than PyPDF2)
-            text = self._extract_text_from_pdf(pdf_path)
-            
-            # Clean up
-            pdf_path.unlink(missing_ok=True)
-            
-            return text
-            
-        except Exception as e:
-            self.logger.error(f"Error downloading/parsing PDF from {pdf_url}: {str(e)}")
-            return None
+            try:
+                # Set headers to appear more like a browser
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                    'Accept': 'application/pdf,application/octet-stream,*/*',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'Connection': 'keep-alive',
+                    'Upgrade-Insecure-Requests': '1',
+                }
+                
+                # Download PDF with timeout and headers
+                response = requests.get(pdf_url, timeout=45, stream=True, headers=headers, allow_redirects=True)
+                response.raise_for_status()
+                
+                # Check if response is actually a PDF
+                content_type = response.headers.get('content-type', '').lower()
+                if 'pdf' not in content_type and len(response.content) < 1000:
+                    self.logger.warning(f"Response doesn't look like PDF: {content_type}")
+                    continue
+                
+                # Save to temporary file
+                pdf_path = self.temp_dir / f"paper_{hash(paper.url)}_{i}.pdf"
+                with open(pdf_path, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                
+                # Verify file size
+                if pdf_path.stat().st_size < 1000:
+                    self.logger.warning(f"Downloaded file too small: {pdf_path.stat().st_size} bytes")
+                    pdf_path.unlink(missing_ok=True)
+                    continue
+                
+                # Extract text using PyMuPDF (better than PyPDF2)
+                text = self._extract_text_from_pdf(pdf_path)
+                
+                # Clean up
+                pdf_path.unlink(missing_ok=True)
+                
+                if text and len(text.strip()) > 100:  # Ensure we got meaningful text
+                    self.logger.info(f"Successfully extracted {len(text)} characters from PDF")
+                    return text
+                else:
+                    self.logger.warning(f"Extracted text too short or empty: {len(text) if text else 0} chars")
+                    continue
+                
+            except requests.exceptions.RequestException as e:
+                self.logger.warning(f"Request failed for {pdf_url}: {str(e)}")
+                continue
+            except Exception as e:
+                self.logger.warning(f"Error processing PDF from {pdf_url}: {str(e)}")
+                continue
+        
+        self.logger.error(f"All PDF download attempts failed for paper: {paper.title}")
+        return None
 
     def _extract_text_from_pdf(self, pdf_path: Path) -> str:
-        """Extract text from PDF using PyMuPDF for better results."""
+        """Extract text from PDF using multiple methods for best results."""
+        text = ""
+        
+        # Try PyMuPDF first (usually better)
         try:
-            text = ""
             with fitz.open(pdf_path) as doc:
-                for page in doc:
-                    text += page.get_text()
-            
-            # Clean up text
-            text = re.sub(r'\s+', ' ', text)  # Normalize whitespace
-            text = re.sub(r'[^\x00-\x7F]+', ' ', text)  # Remove non-ASCII
-            text = text.strip()
-            
-            return text
-            
-        except Exception as e:
-            self.logger.error(f"PyMuPDF extraction failed: {e}, trying PyPDF2...")
-            
-            # Fallback to PyPDF2
-            try:
-                text = ""
-                with open(pdf_path, 'rb') as file:
-                    reader = PyPDF2.PdfReader(file)
-                    for page in reader.pages:
-                        text += page.extract_text()
+                self.logger.info(f"PDF has {len(doc)} pages")
+                
+                for page_num in range(len(doc)):
+                    page = doc[page_num]
+                    page_text = page.get_text()
+                    
+                    # Skip pages with very little text (likely images/figures)
+                    if len(page_text.strip()) > 50:
+                        text += f"\n--- Page {page_num + 1} ---\n"
+                        text += page_text
                 
                 # Clean up text
-                text = re.sub(r'\s+', ' ', text)
-                text = re.sub(r'[^\x00-\x7F]+', ' ', text)
-                text = text.strip()
+                text = self._clean_extracted_text(text)
                 
+                if len(text.strip()) > 100:
+                    self.logger.info(f"PyMuPDF extracted {len(text)} characters successfully")
+                    return text
+                
+        except Exception as e:
+            self.logger.warning(f"PyMuPDF extraction failed: {e}")
+        
+        # Fallback to PyPDF2
+        try:
+            self.logger.info("Trying PyPDF2 as fallback...")
+            text = ""
+            with open(pdf_path, 'rb') as file:
+                reader = PyPDF2.PdfReader(file)
+                self.logger.info(f"PDF has {len(reader.pages)} pages (PyPDF2)")
+                
+                for page_num, page in enumerate(reader.pages):
+                    page_text = page.extract_text()
+                    if len(page_text.strip()) > 50:
+                        text += f"\n--- Page {page_num + 1} ---\n"
+                        text += page_text
+            
+            # Clean up text
+            text = self._clean_extracted_text(text)
+            
+            if len(text.strip()) > 100:
+                self.logger.info(f"PyPDF2 extracted {len(text)} characters successfully")
                 return text
                 
-            except Exception as e2:
-                self.logger.error(f"PyPDF2 extraction also failed: {e2}")
-                return ""
+        except Exception as e:
+            self.logger.error(f"PyPDF2 extraction also failed: {e}")
+        
+        self.logger.error("All text extraction methods failed")
+        return ""
+    
+    def _clean_extracted_text(self, text: str) -> str:
+        """Clean and normalize extracted text."""
+        if not text:
+            return ""
+        
+        # Remove excessive whitespace but preserve paragraph breaks
+        text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)  # Multiple line breaks to double
+        text = re.sub(r'[ \t]+', ' ', text)  # Multiple spaces/tabs to single space
+        text = re.sub(r'\n ', '\n', text)  # Remove spaces at start of lines
+        
+        # Remove non-printable characters but keep common ones
+        text = re.sub(r'[^\x20-\x7E\n\t]', ' ', text)
+        
+        # Remove header/footer patterns that appear on every page
+        text = re.sub(r'\n--- Page \d+ ---\n', '\n', text)
+        
+        # Remove common PDF artifacts
+        text = re.sub(r'\n\d+\n', '\n', text)  # Lone page numbers
+        text = re.sub(r'\nreferences?\n', '\nREFERENCES\n', text, flags=re.IGNORECASE)
+        
+        return text.strip()
 
     async def _analyze_content(self, paper: Paper, full_text: str) -> Optional[Dict[str, Any]]:
-        """Analyze paper content using LLM to extract key findings."""
+        """Analyze paper content using LLM to extract key findings with timeout handling."""
         
-        # Truncate text if too long (keep first 8000 chars for context)
-        truncated_text = full_text[:8000] if len(full_text) > 8000 else full_text
+        # Truncate text if too long (keep first 6000 chars for context)
+        truncated_text = full_text[:6000] if len(full_text) > 6000 else full_text
+        
+        # Add some basic info if text is very short
+        if len(truncated_text.strip()) < 200:
+            self.logger.warning(f"Very short text extracted ({len(truncated_text)} chars), analysis may be limited")
         
         try:
-            # Prepare prompt using template from prompt_templates
+            # Prepare prompt using template
             prompt = self.prompt_templates["key_findings"].format(
                 title=paper.title,
                 abstract=paper.abstract or "No abstract available",
                 full_text=truncated_text
             )
             
-            # Call LLM
-            response = await self.llm.ainvoke(prompt)
+            # Call LLM with timeout
+            self.logger.info(f"Sending {len(prompt)} characters to LLM for analysis...")
+            
+            # Add timeout wrapper
+            import asyncio
+            response = await asyncio.wait_for(
+                self.llm.ainvoke(prompt),
+                timeout=120.0  # 2 minute timeout
+            )
+            
+            # Handle different response types
+            if hasattr(response, 'content'):
+                response_text = response.content
+            elif isinstance(response, str):
+                response_text = response
+            else:
+                response_text = str(response)
+            
+            self.logger.info(f"Received LLM response: {len(response_text)} characters")
             
             # Try to parse JSON response
-            import json
             try:
                 # Extract JSON from response (handle cases where LLM adds extra text)
-                json_match = re.search(r'\{.*\}', response.content, re.DOTALL)
+                
+                # Look for JSON block
+                json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
                 if json_match:
-                    analysis = json.loads(json_match.group())
+                    json_text = json_match.group()
+                    analysis = json.loads(json_text)
+                    
+                    # Validate that we got expected fields
+                    required_fields = ["key_findings", "methodology", "pedagogical_implications", "relevance_score"]
+                    missing_fields = [f for f in required_fields if f not in analysis]
+                    
+                    if missing_fields:
+                        self.logger.warning(f"Missing fields in analysis: {missing_fields}")
+                        # Fill in missing fields with defaults
+                        if "key_findings" not in analysis:
+                            analysis["key_findings"] = ["Analysis incomplete - see raw response"]
+                        if "methodology" not in analysis:
+                            analysis["methodology"] = {"methods": ["Not specified"]}
+                        if "pedagogical_implications" not in analysis:
+                            analysis["pedagogical_implications"] = ["Analysis incomplete"]
+                        if "relevance_score" not in analysis:
+                            analysis["relevance_score"] = 5
+                    
+                    self.logger.info(f"Successfully parsed analysis with {len(analysis.get('key_findings', []))} findings")
                     return analysis
+                    
                 else:
                     self.logger.warning(f"No JSON found in LLM response for {paper.title}")
-                    return None
+                    # Try to extract at least some information from plain text
+                    return self._create_fallback_analysis(response_text, paper.title)
                     
             except json.JSONDecodeError as e:
                 self.logger.error(f"Failed to parse LLM analysis JSON for {paper.title}: {e}")
                 # Return a basic structure with raw response
-                return {
-                    "key_findings": [response.content[:500]],
-                    "methodology": {"methods": ["Analysis unavailable"]},
-                    "pedagogical_implications": ["See raw analysis"],
-                    "limitations": ["Analysis parsing failed"],
-                    "future_work": ["Manual review needed"],
-                    "relevance_score": 5,
-                    "relevance_justification": "Analysis parsing failed, manual review needed"
-                }
+                return self._create_fallback_analysis(response_text, paper.title)
                 
+        except asyncio.TimeoutError:
+            self.logger.error(f"LLM analysis timed out for {paper.title}")
+            return self._create_fallback_analysis("Analysis timed out", paper.title)
         except Exception as e:
             self.logger.error(f"Error in LLM analysis for {paper.title}: {str(e)}")
-            return None
+            return self._create_fallback_analysis(f"Analysis failed: {str(e)}", paper.title)
+    
+    def _create_fallback_analysis(self, response_text: str, paper_title: str) -> Dict[str, Any]:
+        """Create a basic analysis structure when JSON parsing fails."""
+        return {
+            "key_findings": [f"Analysis parsing failed for '{paper_title}'. Raw response: {response_text[:200]}..."],
+            "methodology": {"methods": ["Analysis unavailable"], "sample_size": "Unknown", "data_collection": "Unknown"},
+            "pedagogical_implications": ["Manual review needed for proper analysis"],
+            "limitations": ["Automated analysis failed"],
+            "future_work": ["Requires manual review"],
+            "relevance_score": 5,
+            "relevance_justification": "Analysis parsing failed, manual review needed"
+        }
 
     async def _generate_summary(self, paper: Paper, analysis: Dict[str, Any]) -> str:
         """Generate a concise summary of the analyzed paper."""
@@ -314,7 +455,16 @@ SUMMARY:
             )
             
             response = await self.llm.ainvoke(prompt)
-            return response.content.strip()
+            
+            # Handle different response types
+            if hasattr(response, 'content'):
+                summary = response.content.strip()
+            elif isinstance(response, str):
+                summary = response.strip()
+            else:
+                summary = str(response).strip()
+            
+            return summary
             
         except Exception as e:
             self.logger.error(f"Error generating summary for {paper.title}: {str(e)}")

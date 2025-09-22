@@ -20,11 +20,8 @@ from agents.literature_scout import LiteratureScoutAgent
 from agents.document_analyzer import DocumentAnalyzerAgent
 from agents.physics_specialist import PhysicsSpecialistAgent
 from agents.content_synthesizer import ContentSynthesizerAgent
-
-# TODO: Import other agents when they are implemented
-# from agents.report_generator import ReportGeneratorAgent
-# from agents.quality_controller import QualityControllerAgent
-
+from agents.report_generator import ReportGeneratorAgent
+from agents.quality_controller import QualityControllerAgent
 
 class ResearchOrchestrator:
     """
@@ -101,13 +98,15 @@ class ResearchOrchestrator:
                 ollama_host=self.config.ollama_host
             )
             
-            # TODO: Initialize other agents as they are implemented
-            # agents["report_generator"] = ReportGeneratorAgent(
-            #     config=self.config.get_agent_config("report_generator")
-            # )
-            # agents["quality_controller"] = QualityControllerAgent(
-            #     config=self.config.get_agent_config("quality_controller")
-            # )
+            agents["report_generator"] = ReportGeneratorAgent(
+                config=self.config.get_agent_config("report_generator"),
+                ollama_host=self.config.ollama_host
+            )
+            
+            agents["quality_controller"] = QualityControllerAgent(
+                config=self.config.get_agent_config("quality_controller"),
+                ollama_host=self.config.ollama_host
+            )
             
             self.logger.info(f"Initialized {len(agents)} agents successfully")
             
@@ -126,10 +125,8 @@ class ResearchOrchestrator:
         workflow.add_node("document_analysis", self._document_analysis_node)
         workflow.add_node("physics_validation", self._physics_validation_node)
         workflow.add_node("content_synthesis", self._content_synthesis_node)
-        
-        # TODO: Add nodes for other agents when they are implemented
-        # workflow.add_node("report_generation", self._report_generation_node)
-        # workflow.add_node("quality_control", self._quality_control_node)
+        workflow.add_node("report_generation", self._report_generation_node)
+        workflow.add_node("quality_control", self._quality_control_node)
         
         # Define the workflow edges - connect implemented agents
         workflow.set_entry_point("literature_search")
@@ -143,19 +140,14 @@ class ResearchOrchestrator:
         # Connect physics validation to content synthesis
         workflow.add_edge("physics_validation", "content_synthesis")
         
-        # For now, content synthesis leads to END until other agents are implemented
-        workflow.add_edge("content_synthesis", END)
+        # Connect content synthesis to report generation
+        workflow.add_edge("content_synthesis", "report_generation")
         
-        # TODO: Uncomment when other agents are implemented
-        # workflow.add_edge("content_synthesis", "report_generation")
-        # workflow.add_edge("report_generation", "quality_control")
+        # Connect report generation to quality control
+        workflow.add_edge("report_generation", "quality_control")
         
-        # Quality control can either end or loop back for corrections
-        # workflow.add_conditional_edges(
-        #     "quality_control",
-        #     self._quality_decision,
-        #     {
-        #         "approved": END,
+        # Quality control leads to END (final step)
+        workflow.add_edge("quality_control", END)
         #         "revision_needed": "content_synthesis"
         #     }
         # )
@@ -239,33 +231,29 @@ class ResearchOrchestrator:
         
         return state
     
-    async def _content_synthesis_node(self, state: AgentState) -> AgentState:
-        """Content synthesis node execution."""
-        self.logger.info("Starting content synthesis...")
-        
-        try:
-            result = await self.agents["content_synthesizer"].process(state)
-            state.synthesized_content = result.get("synthesis", {})
-            state.current_step = "content_synthesis_complete"
-            
-            self.logger.info("Content synthesis completed")
-            
-        except Exception as e:
-            self.logger.error(f"Content synthesis failed: {e}")
-            state.errors.append(f"Content synthesis error: {e}")
-        
-        return state
-    
     async def _report_generation_node(self, state: AgentState) -> AgentState:
         """Report generation node execution."""
         self.logger.info("Starting report generation...")
         
         try:
-            result = await self.agents["report_generator"].process(state)
-            state.generated_report = result.get("report", {})
+            # Process through Report Generator Agent
+            result_state = await self.agents["report_generator"].process(state)
+            state = result_state
             state.current_step = "report_generation_complete"
             
-            self.logger.info("Report generation completed")
+            # Log report generation results
+            if hasattr(state, 'research_report') and state.research_report:
+                report = state.research_report
+                formats = list(report.file_paths.keys())
+                pdfs_preserved = report.metadata.get('pdfs_preserved', 0)
+                quality_score = report.quality_score
+                
+                self.logger.info(f"Report generation completed successfully")
+                self.logger.info(f"Generated formats: {', '.join(formats)}")
+                self.logger.info(f"PDFs preserved: {pdfs_preserved}")
+                self.logger.info(f"Report quality score: {quality_score:.2f}")
+            else:
+                self.logger.warning("Report generation completed but no report object created")
             
         except Exception as e:
             self.logger.error(f"Report generation failed: {e}")
@@ -278,12 +266,16 @@ class ResearchOrchestrator:
         self.logger.info("Starting quality control...")
         
         try:
-            result = await self.agents["quality_controller"].process(state)
-            state.quality_assessment = result.get("assessment", {})
+            # Process through Quality Controller Agent
+            result_state = await self.agents["quality_controller"].process(state)
+            state = result_state
             state.current_step = "quality_control_complete"
             
-            quality_score = state.quality_assessment.get("score", 0.0)
-            self.logger.info(f"Quality assessment completed. Score: {quality_score}")
+            quality_score = state.quality_assessment.overall_score if state.quality_assessment else 0.0
+            quality_level = state.quality_assessment.quality_level if state.quality_assessment else "UNKNOWN"
+            
+            self.logger.info(f"Quality control completed. Score: {quality_score:.2f}/10.0, Level: {quality_level}")
+            self.logger.info(f"Quality certified: {state.quality_certified}")
             
         except Exception as e:
             self.logger.error(f"Quality control failed: {e}")
@@ -341,12 +333,12 @@ class ResearchOrchestrator:
             # Build result
             result = ResearchResult(
                 query=query,
-                literature_sources=final_state.papers if hasattr(final_state, 'papers') else [],
-                analysis_summary=final_state.synthesized_content if hasattr(final_state, 'synthesized_content') else {},
-                report=final_state.generated_report if hasattr(final_state, 'generated_report') else {},
-                quality_score=final_state.quality_assessment.get("score", 0.0) if hasattr(final_state, 'quality_assessment') else 0.0,
+                literature_sources=final_state.get('literature_results', []) if isinstance(final_state, dict) else (final_state.literature_results if hasattr(final_state, 'literature_results') else []),
+                analysis_summary=final_state.get('synthesized_content', {}) if isinstance(final_state, dict) else (final_state.synthesized_content if hasattr(final_state, 'synthesized_content') else {}),
+                report=final_state.get('generated_report', {}) if isinstance(final_state, dict) else (final_state.generated_report if hasattr(final_state, 'generated_report') else {}),
+                quality_score=final_state.get('quality_assessment', {}).get("score", 0.0) if isinstance(final_state, dict) else (final_state.quality_assessment.get("score", 0.0) if hasattr(final_state, 'quality_assessment') else 0.0),
                 processing_time=datetime.now() - query.timestamp,
-                errors=final_state.errors
+                errors=final_state.get('errors', []) if isinstance(final_state, dict) else (final_state.errors if hasattr(final_state, 'errors') else [])
             )
             
             # Save result to disk

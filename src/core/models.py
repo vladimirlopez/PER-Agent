@@ -69,6 +69,7 @@ class Paper:
     relevance_score: float = 0.0
     source: str = "unknown"  # arxiv, semantic_scholar, google_scholar
     keywords: List[str] = field(default_factory=list)
+    pdf_url: Optional[str] = None  # Direct link to PDF if available
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -84,7 +85,8 @@ class Paper:
             "citations": self.citations,
             "relevance_score": self.relevance_score,
             "source": self.source,
-            "keywords": self.keywords
+            "keywords": self.keywords,
+            "pdf_url": self.pdf_url
         }
 
 
@@ -310,6 +312,8 @@ class AgentState:
     
     # Quality control results
     quality_assessment: Optional[QualityAssessment] = None
+    final_validation_complete: bool = False
+    quality_certified: bool = False
     
     # Workflow management
     errors: List[str] = field(default_factory=list)
@@ -383,3 +387,57 @@ Research Summary:
 - Insights Generated: {len(self.synthesis_insights)}
 - Report Generated: {'Yes' if self.generated_report else 'No'}
 """
+
+
+@dataclass
+class ResearchReport:
+    """Final research report with multiple formats."""
+    query: ResearchQuery
+    executive_summary: str
+    literature_review: str
+    key_findings: str
+    recommendations: str
+    conclusion: str
+    bibliography: str
+    metadata: Dict[str, Any]
+    file_paths: Dict[str, str]  # format -> file_path mapping
+    quality_score: float
+    generation_timestamp: datetime = field(default_factory=datetime.now)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return {
+            "query": self.query.to_dict(),
+            "executive_summary": self.executive_summary,
+            "literature_review": self.literature_review,
+            "key_findings": self.key_findings,
+            "recommendations": self.recommendations,
+            "conclusion": self.conclusion,
+            "bibliography": self.bibliography,
+            "metadata": self.metadata,
+            "file_paths": self.file_paths,
+            "quality_score": self.quality_score,
+            "generation_timestamp": self.generation_timestamp.isoformat()
+        }
+
+
+@dataclass
+class QualityAssessment:
+    """Quality assessment results from Quality Controller Agent."""
+    overall_score: float
+    component_scores: Dict[str, float]
+    validation_results: Dict[str, Any]
+    recommendations: List[str]
+    assessment_timestamp: datetime
+    quality_level: str  # EXCELLENT, VERY_GOOD, GOOD, SATISFACTORY, NEEDS_IMPROVEMENT, POOR
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return {
+            "overall_score": self.overall_score,
+            "component_scores": self.component_scores,
+            "validation_results": self.validation_results,
+            "recommendations": self.recommendations,
+            "assessment_timestamp": self.assessment_timestamp.isoformat(),
+            "quality_level": self.quality_level
+        }
