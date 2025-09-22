@@ -75,7 +75,31 @@ class BaseAgent(ABC):
     def _initialize_llm(self) -> OllamaLLM:
         """Initialize the Ollama LLM for this agent with fallback support."""
         try:
-            # Try primary model first
+            # If configured to prefer GPU, try to find a GPU variant first
+            from core.config import Config
+            cfg = Config.from_env()
+            chosen_model = self.config.model
+
+            if cfg.prefer_gpu:
+                gpu_variant = cfg.find_gpu_variant(self.config.model)
+                if gpu_variant:
+                    try:
+                        self.logger.info(f"Attempting to initialize GPU-optimized model: {gpu_variant.name}")
+                        llm = OllamaLLM(
+                            model=gpu_variant.model_id,
+                            base_url=self.ollama_host,
+                            temperature=gpu_variant.temperature,
+                            num_predict=gpu_variant.max_tokens,
+                            timeout=self.config.timeout
+                        )
+                        # Update config.model to the GPU variant
+                        self.config.model = gpu_variant
+                        self.logger.info(f"Initialized GPU-optimized LLM: {gpu_variant.name}")
+                        return llm
+                    except Exception as e:
+                        self.logger.warning(f"GPU variant initialization failed: {e}. Falling back to primary model.")
+
+            # Try primary model
             llm = OllamaLLM(
                 model=self.config.model.model_id,
                 base_url=self.ollama_host,
@@ -83,7 +107,7 @@ class BaseAgent(ABC):
                 num_predict=self.config.model.max_tokens,
                 timeout=self.config.timeout
             )
-            
+
             self.logger.info(f"Initialized LLM: {self.config.model.name}")
             return llm
             
@@ -145,49 +169,60 @@ class BaseAgent(ABC):
         """
         pass
     
-    async def _execute_llm_chain(self, prompt_key: str, **kwargs) -> str:
+    async def _execute_llm_chain(self, prompt_key: str, llm_timeout: Optional[float] = None, **kwargs) -> str:
         """
         Execute an LLM chain with error handling and retries.
-        
+
         Args:
             prompt_key: Key for the prompt template to use
+            llm_timeout: Optional per-call timeout in seconds (overrides agent timeout)
             **kwargs: Variables to inject into the prompt template
-            
+
         Returns:
             LLM response as string
         """
         if prompt_key not in self.prompt_templates:
             raise ValueError(f"Prompt template '{prompt_key}' not found")
-        
+
         prompt_template = self.prompt_templates[prompt_key]
-        
+
         for attempt in range(self.config.max_retries):
             try:
                 start_time = datetime.now()
-                
+
                 # Create the chain
                 chain = prompt_template | self.llm | self.output_parser
-                
-                # Execute the chain
-                result = await chain.ainvoke(kwargs)
-                
+
+                # Execute the chain with an optional per-call timeout to avoid hangs
+                timeout_sec = llm_timeout if llm_timeout is not None else self.config.timeout
+                timeout_sec = max(5.0, float(timeout_sec))
+
+                # Run the chain with asyncio.wait_for to apply the per-call timeout
+                result = await asyncio.wait_for(chain.ainvoke(kwargs), timeout=timeout_sec)
+
                 # Track performance
                 execution_time = (datetime.now() - start_time).total_seconds()
                 self.execution_count += 1
                 self.total_processing_time += execution_time
                 self.last_execution_time = execution_time
-                
+
                 self.logger.debug(f"LLM execution completed in {execution_time:.2f}s")
                 return result
-                
+
+            except asyncio.TimeoutError:
+                self.logger.warning(f"LLM execution attempt {attempt + 1} timed out after {timeout_sec}s")
+                if attempt == self.config.max_retries - 1:
+                    self.logger.error("All LLM execution attempts timed out")
+                    raise
+
             except Exception as e:
                 self.logger.warning(f"LLM execution attempt {attempt + 1} failed: {e}")
                 if attempt == self.config.max_retries - 1:
                     self.logger.error(f"All LLM execution attempts failed")
                     raise
-                
-                # Wait before retry
-                await asyncio.sleep(2 ** attempt)  # Exponential backoff
+
+            # Wait before retry (exponential backoff)
+            await asyncio.sleep(2 ** attempt)
     
     def _validate_input(self, state: AgentState) -> bool:
         """

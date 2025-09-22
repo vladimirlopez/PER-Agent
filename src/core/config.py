@@ -53,6 +53,8 @@ class Config:
     # Ollama settings
     ollama_host: str = "http://localhost:11434"
     ollama_timeout: int = 600
+    # Prefer GPU variants for models when available (try GPU first, fall back to CPU)
+    prefer_gpu: bool = True
     
     # Model configurations
     models: Dict[str, ModelConfig] = None
@@ -203,6 +205,11 @@ class Config:
             
         if os.getenv("MAX_SOURCES"):
             config.max_sources_per_query = int(os.getenv("MAX_SOURCES"))
+
+        # Prefer GPU flag (env var defaults to True unless explicitly set to '0' or 'false')
+        if os.getenv("OLLAMA_PREFER_GPU"):
+            val = os.getenv("OLLAMA_PREFER_GPU").lower()
+            config.prefer_gpu = not (val in ("0", "false", "no"))
             
         return config
     
@@ -232,6 +239,32 @@ class Config:
         alternate_key = alternates.get(agent_name)
         if alternate_key and alternate_key in self.models:
             return self.models[alternate_key]
+        return None
+
+    def find_gpu_variant(self, model: ModelConfig) -> Optional[ModelConfig]:
+        """Try to find a GPU-optimized variant of the supplied model in the registry.
+
+        Heuristic used:
+        - Prefer models whose model_id or name contains 'gpu'
+        - Prefer models that share the same base provider name (e.g. 'mistral', 'qwen')
+        - Return the first reasonable match
+        """
+        base_keyword = model.model_id.split(":")[0].lower()
+        # Search for models that indicate GPU usage
+        for m in self.models.values():
+            mid = (m.model_id or "").lower()
+            mname = (m.name or "").lower()
+            if "gpu" in mid or "-gpu" in mid or "gpu" in mname:
+                if base_keyword in mid or base_keyword in mname:
+                    return m
+
+        # If no clear GPU-labeled variant found, try any model with 'gpu' in name/id
+        for m in self.models.values():
+            mid = (m.model_id or "").lower()
+            mname = (m.name or "").lower()
+            if "gpu" in mid or "gpu" in mname:
+                return m
+
         return None
     
     def validate_system_requirements(self) -> bool:

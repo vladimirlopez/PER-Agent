@@ -88,6 +88,7 @@ per-agent/
 │   ├── core/            # Core orchestration and utilities
 │   └── models/          # Data models and schemas
 ├── tests/               # Unit and integration tests
+│   └── legacy/          # Historical demos and ad-hoc test scripts (moved from project root)
 ├── gui/                 # Streamlit web interface
 ├── docs/                # Documentation and examples
 └── requirements.txt     # Python dependencies
@@ -97,6 +98,10 @@ per-agent/
 ```bash
 pytest tests/ -v
 ```
+
+Note: several demo and quick-test scripts were moved from the repository root into `tests/legacy/` to keep the top-level clean. Developer utilities (GPU checks, small helpers) are in `scripts/`.
+
+Repository root cleanup: demo and ad-hoc test scripts were moved into `tests/legacy/`. Use those scripts only for local interactive debugging; they are intentionally not part of automated tests.
 
 ## 📈 Performance
 

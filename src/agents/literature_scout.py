@@ -14,6 +14,7 @@ from langchain_core.prompts import PromptTemplate
 
 from .base_agent import BaseAgent
 from core.models import AgentState, Paper, ResearchDomain
+from core.credentials import PremiumCredentials
 
 
 class LiteratureScoutAgent(BaseAgent):
@@ -29,8 +30,11 @@ class LiteratureScoutAgent(BaseAgent):
     """
     
     def __init__(self, config, ollama_host: str = "http://localhost:11434"):
-        """Initialize the Literature Scout Agent."""
+        """Initialize the Literature Scout Agent with premium database access."""
         super().__init__(config, ollama_host)
+        
+        # Initialize premium credentials
+        self.credentials = PremiumCredentials()
         
         # API configurations
         self.arxiv_client = arxiv.Client()
@@ -41,6 +45,20 @@ class LiteratureScoutAgent(BaseAgent):
         # Search result limits
         self.max_arxiv_results = 50
         self.max_semantic_scholar_results = 50
+        
+        # Log available premium access
+        premium_sources = []
+        if self.credentials.has_aip_access():
+            premium_sources.append("AIP Publishing")
+        if self.credentials.has_compadre_access():
+            premium_sources.append("ComPADRE")
+        if self.credentials.has_per_central_access():
+            premium_sources.append("PER Central")
+        
+        if premium_sources:
+            self.logger.info(f"Premium access available: {', '.join(premium_sources)}")
+        else:
+            self.logger.info("Using free sources only (add credentials to .env for premium access)")
         
         self.logger.info("Literature Scout Agent initialized successfully")
     
@@ -138,10 +156,13 @@ KEYWORDS:
             # Step 1: Enhance keywords using LLM
             enhanced_keywords = await self._enhance_keywords(state.query)
             
-            # Step 2: Search multiple sources
+            # Step 2: Search multiple sources (including premium databases)
             search_tasks = [
                 self._search_arxiv(state.query, enhanced_keywords),
-                self._search_semantic_scholar(state.query, enhanced_keywords)
+                self._search_semantic_scholar(state.query, enhanced_keywords),
+                self._search_aip_publications(state.query, enhanced_keywords),
+                self._search_compadre(state.query, enhanced_keywords),
+                self._search_per_central(state.query, enhanced_keywords)
             ]
             
             search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
@@ -397,61 +418,82 @@ KEYWORDS:
         """Use LLM to rank papers by relevance."""
         if not papers:
             return papers
-        
+        # Lightweight heuristic scoring used for pre-filtering and fallback
+        def heuristic_score(p: Paper) -> float:
+            citation_score = min((p.citations or 0) / 100.0, 0.5)
+            year_score = 0.3 if p.published_date and p.published_date.year >= 2020 else 0.1
+            return citation_score + year_score + 0.2
+
         try:
-            # Prepare papers data for LLM
+            # Pre-filter: pick top candidates by heuristic to reduce LLM workload
+            TOP_K_FOR_LLM = min(6, len(papers))  # limit to at most 6 candidates
+            papers_sorted_by_heuristic = sorted(papers, key=lambda p: heuristic_score(p), reverse=True)
+            llm_candidates = papers_sorted_by_heuristic[:TOP_K_FOR_LLM]
+
+            # Prepare a compact representation for the LLM (truncate abstract heavily)
             papers_data = []
-            for i, paper in enumerate(papers):
+            for i, paper in enumerate(llm_candidates):
+                authors = ', '.join(paper.authors[:3]) + ('...' if len(paper.authors) > 3 else '')
+                abstract_snip = (paper.abstract or '')[:200]
+                if len(paper.abstract or '') > 200:
+                    abstract_snip += '...'
                 papers_data.append(f"""
 Paper {i+1}:
 Title: {paper.title}
-Authors: {', '.join(paper.authors[:3])}{'...' if len(paper.authors) > 3 else ''}
-Abstract: {paper.abstract[:300]}{'...' if len(paper.abstract) > 300 else ''}
+Authors: {authors}
+Abstract: {abstract_snip}
 Journal: {paper.journal or 'N/A'}
 Citations: {paper.citations}
 Year: {paper.published_date.year if paper.published_date else 'Unknown'}
 Source: {paper.source}
 """)
-            
+
             papers_text = "\n".join(papers_data)
             keywords_text = ", ".join(query.keywords) if query.keywords else "None specified"
-            
-            # Get LLM ranking
+
+            # Ask LLM to rank only the compact candidate set, with a per-call timeout to avoid hangs
+            LLm_TIMEOUT_SECONDS = getattr(self, 'ranking_llm_timeout', 12)
             ranking_result = await self._execute_llm_chain(
                 "ranking",
                 question=query.question,
                 domain=query.domain.value,
                 keywords=keywords_text,
-                papers_data=papers_text
+                papers_data=papers_text,
+                llm_timeout=LLm_TIMEOUT_SECONDS,
             )
-            
-            # Parse ranking results
-            scores = self._parse_ranking_results(ranking_result, len(papers))
-            
-            # Apply scores to papers
-            for i, paper in enumerate(papers):
+
+            # Parse ranking results for the candidate set
+            scores = self._parse_ranking_results(ranking_result, len(llm_candidates))
+
+            # Apply LLM scores to the candidate set
+            for i, paper in enumerate(llm_candidates):
                 if i < len(scores):
-                    paper.relevance_score = scores[i]["score"]
-                    # Extract additional metadata from LLM analysis
+                    paper.relevance_score = scores[i].get("score", heuristic_score(paper))
                     if "physics_concepts" in scores[i]:
                         paper.keywords.extend(scores[i]["physics_concepts"])
                 else:
-                    paper.relevance_score = 0.5  # Default score
-            
-            # Sort by relevance score
+                    paper.relevance_score = heuristic_score(paper)
+
+            # For remaining papers not sent to LLM, use heuristic scores
+            remaining = [p for p in papers if p not in llm_candidates]
+            for p in remaining:
+                p.relevance_score = heuristic_score(p)
+
+            # Combine and sort all papers by final relevance_score
             ranked_papers = sorted(papers, key=lambda p: p.relevance_score, reverse=True)
-            
-            self.logger.info(f"Ranked {len(ranked_papers)} papers, top score: {ranked_papers[0].relevance_score:.2f}")
+            self.logger.info(f"Ranked {len(ranked_papers)} papers (LLM used on {len(llm_candidates)}), top score: {ranked_papers[0].relevance_score:.2f}")
             return ranked_papers
-            
+
+        except asyncio.TimeoutError:
+            self.logger.warning("LLM ranking timed out; falling back to heuristic scoring")
+            for paper in papers:
+                paper.relevance_score = heuristic_score(paper)
+            return sorted(papers, key=lambda p: p.relevance_score, reverse=True)
+
         except Exception as e:
             self.logger.warning(f"Paper ranking failed: {e}, using default scoring")
-            # Fallback: score based on citations and recency
             for paper in papers:
-                citation_score = min(paper.citations / 100.0, 0.5)  # Max 0.5 for citations
-                year_score = 0.3 if paper.published_date and paper.published_date.year >= 2020 else 0.1
-                paper.relevance_score = citation_score + year_score + 0.2  # Base score
-            
+                paper.relevance_score = heuristic_score(paper)
             return sorted(papers, key=lambda p: p.relevance_score, reverse=True)
     
     def _parse_ranking_results(self, ranking_text: str, num_papers: int) -> List[Dict[str, Any]]:
@@ -537,3 +579,288 @@ Source: {paper.source}
             except (ValueError, TypeError):
                 return None
         return None
+    
+    async def _search_aip_publications(self, query, keywords: List[str]) -> List[Paper]:
+        """
+        Search AIP Publishing journals including American Journal of Physics, 
+        The Physics Teacher, Physics Today, and other premium content.
+        Requires valid AIP credentials for access to pubs.aip.org.
+        """
+        papers = []
+        # Best-effort: try authenticated session to pubs.aip.org, otherwise fall back to CrossRef
+        import httpx
+        from bs4 import BeautifulSoup
+        from core.credentials import PremiumCredentials
+
+        creds = PremiumCredentials()
+        client = httpx.AsyncClient(timeout=20.0)
+
+            # Try Playwright-based login helper to get cookies if available
+        try:
+            from core.premium_auth import synchronous_get_cookies_loop, httpx_cookie_dict_to_header
+            aip_cookies = None
+            if creds.has_aip_access():
+                ac = creds.get_aip_credentials()
+                try:
+                    aip_cookies = synchronous_get_cookies_loop('aip', ac['username'], ac['password'])
+                    if aip_cookies:
+                        client.headers.update({'Cookie': httpx_cookie_dict_to_header(aip_cookies)})
+                        self.logger.info('Applied Playwright-derived cookies for AIP session')
+                except Exception:
+                    self.logger.debug('Playwright AIP cookie helper failed; continuing with httpx flows')
+        except Exception:
+            # premium_auth or playwright not available; continue
+            aip_cookies = None
+
+        try:
+            self.logger.info("Searching AIP publications (authenticated when possible)...")
+
+            # Build a conservative search string
+            search_query = f"{query.question} physics education"
+
+            # If we have AIP credentials, try to login and hit search pages
+            if creds.has_aip_access():
+                self.logger.info("Attempting authenticated AIP session")
+                aip_creds = creds.get_aip_credentials()
+                try:
+                    # Pseudo-login flow: fetch login page to get any CSRF tokens, then post
+                    login_page = await client.get("https://pubs.aip.org/login")
+                    soup = BeautifulSoup(login_page.text, "html.parser")
+                    # Try to find csrf token or hidden inputs
+                    token_input = soup.find('input', {'name': 'authenticity_token'})
+                    token = token_input.get('value') if token_input else None
+
+                    login_payload = {
+                        'username': aip_creds['username'],
+                        'password': aip_creds['password']
+                    }
+                    if token:
+                        login_payload['authenticity_token'] = token
+
+                    post = await client.post("https://pubs.aip.org/login", data=login_payload)
+                    if post.status_code not in (200, 302):
+                        self.logger.warning(f"AIP login attempt returned {post.status_code}")
+                    else:
+                        self.logger.info("AIP login attempt finished; attempting search as authenticated user")
+
+                    # Search URL pattern — try simple query param
+                    resp = await client.get("https://pubs.aip.org/search", params={"q": search_query})
+                    if resp.status_code == 200:
+                        soup = BeautifulSoup(resp.text, "html.parser")
+                        # Attempt to parse search result items conservatively
+                        results = soup.select('.search-result, .article-list-item')
+                        for item in results[:10]:
+                            title_tag = item.find('h2') or item.find('a')
+                            title = title_tag.get_text(strip=True) if title_tag else None
+                            link = title_tag.get('href') if title_tag and title_tag.has_attr('href') else None
+                            abstract_tag = item.select_one('.abstract')
+                            abstract = abstract_tag.get_text(strip=True) if abstract_tag else ''
+                            meta = item.get_text(separator=' | ')
+                            # Basic filter by keywords
+                            if title and any(k.lower() in (title + abstract + meta).lower() for k in keywords + [query.question]):
+                                paper = Paper(
+                                    title=title,
+                                    authors=[],
+                                    abstract=abstract,
+                                    published_date=None,
+                                    doi=None,
+                                    url=(link if link and link.startswith('http') else ("https://pubs.aip.org" + link if link else None)),
+                                    pdf_url=None,
+                                    journal=None,
+                                    source="AIP",
+                                    keywords=keywords
+                                )
+                                papers.append(paper)
+
+                except Exception as e:
+                    self.logger.warning(f"AIP authenticated search failed: {e}; falling back to CrossRef/plain search")
+
+            # Fallback: Use CrossRef API to find DOIs for the query and then fetch metadata
+            if not papers:
+                try:
+                    self.logger.info("Falling back to CrossRef metadata search for AIP-related content")
+                    cr = await client.get("https://api.crossref.org/works", params={"query": search_query, "rows": 10})
+                    if cr.status_code == 200:
+                        j = cr.json()
+                        items = j.get('message', {}).get('items', [])
+                        for item in items:
+                            title = item.get('title', [None])[0]
+                            abstract = item.get('abstract') or ''
+                            doi = item.get('DOI')
+                            pub_date = None
+                            if item.get('issued') and item['issued'].get('date-parts'):
+                                yp = item['issued']['date-parts'][0]
+                                if yp:
+                                    pub_date = self._parse_year_to_date(yp[0])
+
+                            if title and any(k.lower() in (title + (abstract or '')).lower() for k in keywords + [query.question]):
+                                paper = Paper(
+                                    title=title,
+                                    authors=[a.get('family', '') for a in item.get('author', [])] or [],
+                                    abstract=(abstract or '').replace('<jats:p>', '').replace('</jats:p>', ''),
+                                    published_date=pub_date,
+                                    doi=doi,
+                                    url=item.get('URL'),
+                                    pdf_url=None,
+                                    journal=item.get('container-title', [None])[0],
+                                    source="CrossRef",
+                                    keywords=keywords
+                                )
+                                papers.append(paper)
+
+                except Exception as e:
+                    self.logger.warning(f"CrossRef fallback failed: {e}")
+
+        except Exception as e:
+            self.logger.error(f"AIP search failed unexpectedly: {e}")
+        finally:
+            await client.aclose()
+
+        self.logger.info(f"AIP search completed: {len(papers)} papers/resources discovered")
+        return papers
+    
+    async def _search_compadre(self, query, keywords: List[str]) -> List[Paper]:
+        """
+        Search ComPADRE (Community for Physics and Astronomy Digital Resources Exchange).
+        Access physics education resources, simulations, and teaching materials.
+        """
+        papers = []
+        import httpx
+        from bs4 import BeautifulSoup
+        from core.credentials import PremiumCredentials
+
+        papers = []
+        client = httpx.AsyncClient(timeout=20.0)
+        creds = PremiumCredentials()
+
+        try:
+            self.logger.info("Searching ComPADRE (attempting authenticated access when configured)")
+            search_query = " ".join((keywords or [])[:5]) + f" {query.question}"
+
+            # Simple public search on ComPADRE (no official public API documented for search)
+            try:
+                resp = await client.get("https://www.compadre.org/search/", params={"q": search_query})
+                if resp.status_code == 200:
+                    soup = BeautifulSoup(resp.text, "html.parser")
+                    items = soup.select('.result, .search-result')
+                    for it in items[:10]:
+                        title_tag = it.find('a') or it.find('h3')
+                        title = title_tag.get_text(strip=True) if title_tag else None
+                        link = title_tag.get('href') if title_tag and title_tag.has_attr('href') else None
+                        desc = it.get_text(strip=True)
+                        if title and any(k.lower() in (title + desc).lower() for k in keywords + [query.question]):
+                            paper = Paper(
+                                title=title,
+                                authors=[],
+                                abstract=desc,
+                                published_date=None,
+                                url=(link if link and link.startswith('http') else ("https://www.compadre.org" + link if link else None)),
+                                journal='ComPADRE',
+                                source='ComPADRE',
+                                keywords=keywords
+                            )
+                            papers.append(paper)
+
+            except Exception as e:
+                self.logger.warning(f"ComPADRE basic search failed: {e}")
+
+            # If ComPADRE credentials are available, attempt a Playwright login helper first
+            if creds.has_compadre_access():
+                try:
+                    from core.premium_auth import synchronous_get_cookies_loop, httpx_cookie_dict_to_header
+                    comp_creds = creds.get_compadre_credentials()
+                    comp_cookies = synchronous_get_cookies_loop('compadre', comp_creds['username'], comp_creds['password'])
+                    if comp_cookies:
+                        client.headers.update({'Cookie': httpx_cookie_dict_to_header(comp_cookies)})
+                        self.logger.info('Applied Playwright-derived cookies for ComPADRE session')
+                    else:
+                        # Try simple POST login fallback
+                        login_page = await client.get('https://www.compadre.org/login')
+                        soup = BeautifulSoup(login_page.text, 'html.parser')
+                        token_input = soup.find('input', {'name': 'csrfmiddlewaretoken'})
+                        token = token_input.get('value') if token_input else None
+                        payload = {'username': comp_creds['username'], 'password': comp_creds['password']}
+                        if token:
+                            payload['csrfmiddlewaretoken'] = token
+                        post = await client.post('https://www.compadre.org/accounts/login/', data=payload)
+                        self.logger.info(f"ComPADRE login attempt status: {post.status_code}")
+
+                except Exception as e:
+                    self.logger.warning(f"ComPADRE authenticated attempt failed: {e}")
+
+        except Exception as e:
+            self.logger.error(f"ComPADRE search failed: {e}")
+        finally:
+            await client.aclose()
+
+        self.logger.info(f"ComPADRE search completed: {len(papers)} resources")
+        return papers
+    
+    async def _search_per_central(self, query, keywords: List[str]) -> List[Paper]:
+        """
+        Search PER Central for physics education research papers and resources.
+        Specialized database for physics education research (PER) content.
+        """
+        papers = []
+        import httpx
+        from bs4 import BeautifulSoup
+        from core.credentials import PremiumCredentials
+
+        papers = []
+        client = httpx.AsyncClient(timeout=20.0)
+        creds = PremiumCredentials()
+
+        try:
+            self.logger.info("Searching PER Central (authenticated when available)")
+            search_query = f"{query.question} physics education"
+
+            # PER-Central provides a web interface; attempt a search page scrape
+            try:
+                resp = await client.get('https://per-central.org/search', params={'q': search_query})
+                if resp.status_code == 200:
+                    soup = BeautifulSoup(resp.text, 'html.parser')
+                    items = soup.select('.search-result, .result-item')
+                    for it in items[:10]:
+                        title_tag = it.find('a') or it.find('h3')
+                        title = title_tag.get_text(strip=True) if title_tag else None
+                        link = title_tag.get('href') if title_tag and title_tag.has_attr('href') else None
+                        desc = it.get_text(strip=True)
+                        if title and any(k.lower() in (title + desc).lower() for k in keywords + [query.question]):
+                            paper = Paper(
+                                title=title,
+                                authors=[],
+                                abstract=desc,
+                                published_date=None,
+                                url=(link if link and link.startswith('http') else ("https://per-central.org" + link if link else None)),
+                                journal='PER-Central',
+                                source='PER-Central',
+                                keywords=keywords
+                            )
+                            papers.append(paper)
+
+            except Exception as e:
+                self.logger.warning(f"PER Central basic search failed: {e}")
+
+            # If PER-Central credentials are available, a login attempt can be made (best-effort)
+            if creds.has_per_central_access():
+                try:
+                    per_creds = creds.get_per_central_credentials()
+                    login_page = await client.get('https://per-central.org/login')
+                    soup = BeautifulSoup(login_page.text, 'html.parser')
+                    token_input = soup.find('input', {'name': 'csrfmiddlewaretoken'})
+                    token = token_input.get('value') if token_input else None
+                    payload = {'username': per_creds['username'], 'password': per_creds['password']}
+                    if token:
+                        payload['csrfmiddlewaretoken'] = token
+                    post = await client.post('https://per-central.org/accounts/login/', data=payload)
+                    self.logger.info(f"PER-Central login attempt status: {post.status_code}")
+                except Exception as e:
+                    self.logger.warning(f"PER Central authenticated attempt failed: {e}")
+
+        except Exception as e:
+            self.logger.error(f"PER Central search failed: {e}")
+        finally:
+            await client.aclose()
+
+        self.logger.info(f"PER Central search completed: {len(papers)} papers/resources")
+        return papers

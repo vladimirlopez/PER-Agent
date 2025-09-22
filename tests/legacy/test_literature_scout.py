@@ -7,11 +7,11 @@ import sys
 from pathlib import Path
 
 # Add src to path for imports
-sys.path.append(str(Path(__file__).parent.parent))
+sys.path.append(str(Path(__file__).parent.parent / 'src'))
 
-from src.core.config import Config
-from src.core.models import ResearchQuery, ResearchDomain, AgentState
-from src.agents.literature_scout import LiteratureScoutAgent
+from core.config import Config
+from core.models import ResearchQuery, ResearchDomain, AgentState
+from agents.literature_scout import LiteratureScoutAgent
 
 
 async def test_literature_scout_basic():
@@ -138,119 +138,8 @@ async def test_literature_scout_basic():
         traceback.print_exc()
 
 
-async def test_with_ollama():
-    """Test full Literature Scout with Ollama LLM integration."""
-    print("\n" + "=" * 60)
-    print("🤖 Testing Literature Scout Agent - Full LLM Integration")
-    print("=" * 60)
-    
-    try:
-        # Check if Ollama is running
-        import requests
-        try:
-            response = requests.get("http://localhost:11434/api/tags", timeout=5)
-            if response.status_code == 200:
-                models = response.json().get("models", [])
-                print(f"✅ Ollama is running with {len(models)} models")
-                for model in models[:3]:  # Show first 3 models
-                    print(f"   - {model['name']}")
-            else:
-                print("❌ Ollama is not responding properly")
-                return
-        except Exception as e:
-            print(f"❌ Ollama connection failed: {e}")
-            print("💡 Please start Ollama with: ollama serve")
-            return
-        
-        # Initialize full agent
-        config = Config()
-        agent = LiteratureScoutAgent(
-            config=config.get_agent_config("literature_scout"),
-            ollama_host=config.ollama_host
-        )
-        
-        print("✅ Literature Scout Agent initialized successfully")
-        
-        # Test health check
-        health = await agent.health_check()
-        print(f"🏥 Health Check: {health['status']}")
-        if health['status'] == 'unhealthy':
-            print(f"❌ Agent unhealthy: {health.get('error', 'Unknown error')}")
-            return
-        
-        # Create test query
-        query = ResearchQuery(
-            question="How do interactive simulations help students understand wave physics?",
-            domain=ResearchDomain.PHYSICS_EDUCATION,
-            max_sources=8,
-            keywords=["wave physics", "simulations", "student understanding"]
-        )
-        
-        # Create agent state
-        state = AgentState(query=query, current_step="literature_search")
-        
-        print(f"\n🔍 Running full literature search...")
-        print(f"   Query: {query.question}")
-        print(f"   Max Sources: {query.max_sources}")
-        
-        # Run the agent
-        result = await agent.process(state)
-        
-        if result.get("success"):
-            papers = result.get("papers", [])
-            print(f"✅ Literature search completed successfully!")
-            print(f"📊 Results:")
-            print(f"   - Total found: {result.get('total_found', 0)}")
-            print(f"   - Unique papers: {result.get('unique_count', 0)}")
-            print(f"   - Final selection: {len(papers)}")
-            print(f"   - Enhanced keywords: {len(result.get('enhanced_keywords', []))}")
-            
-            if papers:
-                print(f"\n📑 Top 3 Papers:")
-                for i, paper in enumerate(papers[:3], 1):
-                    print(f"   {i}. {paper.title[:60]}...")
-                    print(f"      Score: {paper.relevance_score:.2f}")
-                    print(f"      Authors: {', '.join(paper.authors[:2])}")
-                    print(f"      Source: {paper.source}")
-                    if paper.published_date:
-                        print(f"      Year: {paper.published_date.year}")
-                    print()
-            
-            print("🎉 Full Literature Scout Agent test successful!")
-            
-        else:
-            print(f"❌ Literature search failed: {result.get('error', 'Unknown error')}")
-            
-    except Exception as e:
-        print(f"❌ Full test failed: {e}")
-        import traceback
-        traceback.print_exc()
-
-
 async def main():
-    """Main test function."""
-    print("🧪 PER Agent - Literature Scout Test Suite")
-    print("=" * 60)
-    
-    # Always run basic test
     await test_literature_scout_basic()
-    
-    # Ask user if they want to test with Ollama
-    try:
-        user_input = input(f"\n🤖 Test with Ollama LLM integration? (y/N): ").strip().lower()
-        if user_input == 'y':
-            await test_with_ollama()
-        else:
-            print("⏭️ Skipping Ollama test. Run 'ollama serve' and rerun for full testing.")
-    except (KeyboardInterrupt, EOFError):
-        print("\n👋 Test interrupted by user")
-
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("\n👋 Testing stopped by user")
-    except Exception as e:
-        print(f"\n❌ Test suite failed: {e}")
-        sys.exit(1)
+    asyncio.run(main())
