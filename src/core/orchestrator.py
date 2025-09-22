@@ -14,7 +14,8 @@ from langchain_core.messages import HumanMessage, AIMessage
 
 from .config import Config
 from .models import ResearchQuery, ResearchResult, AgentState
-from ..agents.literature_scout import LiteratureScoutAgent
+# TODO: Import agents when they are implemented
+# from ..agents.literature_scout import LiteratureScoutAgent
 from ..agents.document_analyzer import DocumentAnalyzerAgent
 from ..agents.physics_specialist import PhysicsSpecialistAgent
 from ..agents.content_synthesizer import ContentSynthesizerAgent
@@ -76,26 +77,27 @@ class ResearchOrchestrator:
         agents = {}
         
         try:
-            agents["literature_scout"] = LiteratureScoutAgent(
-                config=self.config.get_agent_config("literature_scout")
-            )
-            agents["document_analyzer"] = DocumentAnalyzerAgent(
-                config=self.config.get_agent_config("document_analyzer")
-            )
-            agents["physics_specialist"] = PhysicsSpecialistAgent(
-                config=self.config.get_agent_config("physics_specialist")
-            )
-            agents["content_synthesizer"] = ContentSynthesizerAgent(
-                config=self.config.get_agent_config("content_synthesizer")
-            )
-            agents["report_generator"] = ReportGeneratorAgent(
-                config=self.config.get_agent_config("report_generator")
-            )
-            agents["quality_controller"] = QualityControllerAgent(
-                config=self.config.get_agent_config("quality_controller")
-            )
+            # TODO: Initialize agents as they are implemented
+            # agents["literature_scout"] = LiteratureScoutAgent(
+            #     config=self.config.get_agent_config("literature_scout")
+            # )
+            # agents["document_analyzer"] = DocumentAnalyzerAgent(
+            #     config=self.config.get_agent_config("document_analyzer")
+            # )
+            # agents["physics_specialist"] = PhysicsSpecialistAgent(
+            #     config=self.config.get_agent_config("physics_specialist")
+            # )
+            # agents["content_synthesizer"] = ContentSynthesizerAgent(
+            #     config=self.config.get_agent_config("content_synthesizer")
+            # )
+            # agents["report_generator"] = ReportGeneratorAgent(
+            #     config=self.config.get_agent_config("report_generator")
+            # )
+            # agents["quality_controller"] = QualityControllerAgent(
+            #     config=self.config.get_agent_config("quality_controller")
+            # )
             
-            self.logger.info("All agents initialized successfully")
+            self.logger.info("Agent initialization ready (agents will be added as implemented)")
             
         except Exception as e:
             self.logger.error(f"Failed to initialize agents: {e}")
